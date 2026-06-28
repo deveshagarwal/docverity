@@ -14,9 +14,9 @@ docs. Docverity verifies the prose around them: the flags, options, environment
 variables, paths, and behavior your documentation describes are checked against
 what the code actually does.
 
-## Two engines
+## Three checks
 
-Docverity ships with two complementary engines:
+Docverity runs three complementary checks:
 
 - **Reference checker** — deterministic, no API key, instant. Catches docs that
   mention files, CLI flags, environment variables, or symbols that no longer
