@@ -2,6 +2,8 @@
 
 **Catch documentation that lies about your code.**
 
+![Docverity catching documentation drift](docs/demo.gif)
+
 Docverity reads your docs, extracts the concrete claims they make about your
 codebase, and checks each one against the actual source. When a documented flag
 gets renamed, a config default changes, or a referenced file is deleted, your
