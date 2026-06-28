@@ -158,7 +158,7 @@ async function runCheck(args: {
 /** Start the stdio MCP server. Only protocol messages go to stdout. */
 export async function runMcpServer(): Promise<void> {
   const server = new Server(
-    { name: "docverity", version: "0.1.0" },
+    { name: "docverity", version: "0.2.0" },
     { capabilities: { tools: {} } },
   );
 

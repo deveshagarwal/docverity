@@ -16,7 +16,7 @@ const program = new Command();
 program
   .name("docverity")
   .description("Catch documentation that lies about your code.")
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("check", { isDefault: true })
