@@ -1,6 +1,6 @@
 {
   "name": "docverity",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Catch documentation that lies about your code. Verify that your docs' claims still match the source, in CI.",
   "type": "module",
   "bin": {
