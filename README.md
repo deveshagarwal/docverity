@@ -1,18 +1,18 @@
 # Docverity
 
-**Catch documentation that lies about your code.**
+**AI made documentation rot an epidemic.**
 
 ![Docverity catching documentation drift](docs/demo.gif)
 
-Docverity reads your docs, extracts the concrete claims they make about your
-codebase, and checks each one against the actual source. When a documented flag
-gets renamed, a config default changes, or a referenced file is deleted, your
-docs silently start lying. Docverity turns that into a failing check, in CI,
-before your users hit it.
+Code changes by the hour, and AI assistants only make it faster. Documentation
+does not keep up. Docverity reads your documentation, extracts the concrete
+claims it makes about the codebase, and checks each one against the source.
+Drift becomes a failing check in CI, the same way a broken test would.
 
-Existing tools run the code blocks in your docs (`doctest`, `mdbook test`) or
-help you author and host docs. None of them verify that the *prose* still tells
-the truth about the code. That is the gap Docverity fills.
+Tools like `doctest` and `mdbook test` run the code blocks embedded in your
+docs. Docverity verifies the prose around them: the flags, options, environment
+variables, paths, and behavior your documentation describes are checked against
+what the code actually does.
 
 ## Two engines
 

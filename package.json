@@ -1,7 +1,7 @@
 {
   "name": "docverity",
   "version": "0.2.0",
-  "description": "Catch documentation that lies about your code. Verify that your docs' claims still match the source, in CI.",
+  "description": "AI made documentation rot an epidemic. Docverity checks your docs' claims against the source and fails CI when they drift. Also runs as an MCP tool for coding agents.",
   "type": "module",
   "bin": {
     "docverity": "dist/cli.js"
