@@ -35,11 +35,23 @@ export interface Evidence {
   snippet: string;
 }
 
-export type Status = "ok" | "drifted" | "unverifiable";
+export type Status =
+  | "ok" // the claim is confirmed by the code
+  | "drifted" // the docs say something the code contradicts
+  | "unverifiable" // not enough evidence to decide
+  | "undocumented"; // the code has something the docs never mention (coverage)
+
+// How much a finding matters, independent of how confident we are it's real.
+//  - error:   a reader acts on it and gets burned (wrong command/flag/env/default)
+//  - warning: real but not blocking (stale path/symbol reference, a coverage gap)
+//  - info:    unverifiable or trivial
+export type Severity = "error" | "warning" | "info";
 
 export interface Verdict {
   claim: Claim;
   status: Status;
+  /** How much this finding matters. */
+  severity: Severity;
   /** 0..1 confidence in the verdict. */
   confidence: number;
   /** The specific reason, e.g. "no occurrence of --json in the codebase". */
@@ -49,7 +61,7 @@ export interface Verdict {
   /** Optional suggested doc fix (LLM engine only). */
   suggestedFix?: string;
   /** Which engine produced this verdict. */
-  engine: "reference" | "llm";
+  engine: "reference" | "llm" | "coverage";
 }
 
 export interface CheckOptions {
@@ -61,8 +73,12 @@ export interface CheckOptions {
   useLlm: boolean;
   /** Model id for the LLM engine. */
   model: string;
+  /** Also report code (flags, env vars) that the docs never mention. */
+  coverage: boolean;
   /** Minimum confidence to count a "drifted" verdict as a failure. */
   failConfidence: number;
+  /** Lowest severity that fails the build: error | warning | info | none. */
+  failOn: Severity | "none";
   /** Treat "unverifiable" as failures too. */
   strict: boolean;
 }

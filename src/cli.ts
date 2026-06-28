@@ -6,7 +6,9 @@ import kleur from "kleur";
 import type { CheckOptions, Verdict } from "./types.js";
 import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
+import { findUndocumented } from "./coverage.js";
 import { hasApiKey } from "./llm.js";
+import type { Severity } from "./types.js";
 import { printReport, printGithubAnnotations, toJson, summarize } from "./report.js";
 import { discoverDocs } from "./discover.js";
 // verify-llm and mcp pull in heavy SDKs; they are imported lazily, only when used.
@@ -25,7 +27,9 @@ program
   .option("-C, --root <dir>", "repo root", process.cwd())
   .option("--no-llm", "skip the LLM claim verifier (deterministic checks only)")
   .option("--model <id>", "model for the LLM engine", "claude-opus-4-8")
+  .option("--no-coverage", "skip the code->docs check for undocumented flags/env vars")
   .option("--fail-confidence <n>", "min confidence to fail on (0..1)", "0.7")
+  .option("--fail-on <level>", "lowest severity that fails the build: error|warning|info|none", "error")
   .option("--strict", "also fail on unverifiable claims", false)
   .option("--format <fmt>", "output format: pretty | json | github", "pretty")
   .action(async (docs: string[], rawOpts) => {
@@ -58,6 +62,14 @@ program
       }
     }
 
+    const failOn = String(rawOpts.failOn) as Severity | "none";
+    if (!["error", "warning", "info", "none"].includes(failOn)) {
+      console.error(
+        kleur.red(`Invalid --fail-on: ${rawOpts.failOn} (expected error|warning|info|none).`),
+      );
+      process.exit(2);
+    }
+
     if (!docFiles.length) {
       console.error(kleur.yellow("No documentation files found."));
       process.exit(0);
@@ -77,7 +89,9 @@ program
       docFiles,
       useLlm,
       model: rawOpts.model,
+      coverage: rawOpts.coverage !== false,
       failConfidence,
+      failOn,
       strict: Boolean(rawOpts.strict),
     };
 
@@ -100,6 +114,15 @@ program
             kleur.yellow(`LLM engine failed on ${doc}: ${err?.message ?? err}`),
           );
         }
+      }
+    }
+
+    // Coverage: flags/env vars the code uses but the docs never mention.
+    if (opts.coverage) {
+      try {
+        verdicts.push(...findUndocumented(root, docFiles));
+      } catch (err: any) {
+        console.error(kleur.yellow(`Coverage check failed: ${err?.message ?? err}`));
       }
     }
 

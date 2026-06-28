@@ -1,5 +1,6 @@
 import type { Claim, Verdict } from "./types.js";
 import { searchToken, fileExists } from "./search.js";
+import { driftSeverity } from "./severity.js";
 
 /**
  * The deterministic engine: verify each claim by looking for hard evidence in
@@ -24,6 +25,7 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
         return {
           ...base,
           status: "ok",
+          severity: "info",
           confidence: 0.95,
           explanation: `${claim.text} exists on disk.`,
         };
@@ -35,6 +37,7 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
         return {
           ...base,
           status: "unverifiable",
+          severity: "info",
           confidence: 0.3,
           explanation: `${claim.text} is not a file in the repo; it may be a library or framework name rather than a path.`,
         };
@@ -42,6 +45,7 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
       return {
         ...base,
         status: "drifted",
+        severity: driftSeverity("file"),
         confidence: 0.9,
         explanation: `The docs reference ${claim.text}, but no such file or directory exists.`,
         suggestedFix: `Update or remove the reference to ${claim.text}.`,
@@ -57,6 +61,7 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
         return {
           ...base,
           status: "ok",
+          severity: "info",
           confidence: 0.8,
           explanation: `Found ${hits.length} occurrence(s) of ${claim.text} in the source.`,
           evidence: hits.slice(0, 3),
@@ -73,6 +78,7 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
       return {
         ...base,
         status: "drifted",
+        severity: driftSeverity(claim.kind),
         confidence: 0.8,
         explanation: `The docs mention the ${noun} ${claim.text}, but it does not appear anywhere in the source.`,
         suggestedFix: `Verify ${claim.text} still exists; it may have been renamed or removed.`,
@@ -83,6 +89,7 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
       return {
         ...base,
         status: "unverifiable",
+        severity: "info",
         confidence: 0.3,
         explanation: `Prose claim — needs the LLM engine to verify.`,
       };

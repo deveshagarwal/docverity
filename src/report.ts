@@ -1,10 +1,14 @@
 import kleur from "kleur";
 import type { Verdict, CheckOptions } from "./types.js";
+import { meetsFailThreshold, severityRank } from "./severity.js";
 
 export interface Summary {
   ok: number;
   drifted: number;
   unverifiable: number;
+  undocumented: number;
+  errors: number;
+  warnings: number;
   failures: Verdict[];
 }
 
@@ -13,72 +17,117 @@ export function effectiveFailConfidence(opts: CheckOptions): number {
   return Number.isFinite(opts.failConfidence) ? opts.failConfidence : 0.7;
 }
 
-export function summarize(verdicts: Verdict[], opts: CheckOptions): Summary {
+/** Whether a single verdict should fail the build, given confidence and severity. */
+export function isFailure(v: Verdict, opts: CheckOptions): boolean {
   const failConfidence = effectiveFailConfidence(opts);
+  if (v.status === "drifted" || v.status === "undocumented") {
+    return v.confidence >= failConfidence && meetsFailThreshold(v.severity, opts.failOn);
+  }
+  if (v.status === "unverifiable") return opts.strict;
+  return false;
+}
+
+/** Findings worth showing: drift and coverage gaps above the confidence floor. */
+function reportable(verdicts: Verdict[], opts: CheckOptions): Verdict[] {
+  const failConfidence = effectiveFailConfidence(opts);
+  return verdicts
+    .filter(
+      (v) =>
+        (v.status === "drifted" || v.status === "undocumented") &&
+        v.confidence >= failConfidence,
+    )
+    .sort(
+      (a, b) =>
+        severityRank(b.severity) - severityRank(a.severity) ||
+        b.confidence - a.confidence,
+    );
+}
+
+export function summarize(verdicts: Verdict[], opts: CheckOptions): Summary {
   let ok = 0;
   let drifted = 0;
   let unverifiable = 0;
+  let undocumented = 0;
   const failures: Verdict[] = [];
-
   for (const v of verdicts) {
     if (v.status === "ok") ok++;
-    else if (v.status === "drifted") {
-      drifted++;
-      if (v.confidence >= failConfidence) failures.push(v);
-    } else {
-      unverifiable++;
-      if (opts.strict) failures.push(v);
-    }
+    else if (v.status === "drifted") drifted++;
+    else if (v.status === "undocumented") undocumented++;
+    else unverifiable++;
+    if (isFailure(v, opts)) failures.push(v);
   }
-  return { ok, drifted, unverifiable, failures };
+  const shown = reportable(verdicts, opts);
+  return {
+    ok,
+    drifted,
+    unverifiable,
+    undocumented,
+    errors: shown.filter((v) => v.severity === "error").length,
+    warnings: shown.filter((v) => v.severity === "warning").length,
+    failures,
+  };
 }
+
+const MARK: Record<string, (s: string) => string> = {
+  error: (s) => kleur.red(s),
+  warning: (s) => kleur.yellow(s),
+  info: (s) => kleur.dim(s),
+};
 
 /** Pretty terminal report. Returns true if the check should fail the build. */
 export function printReport(verdicts: Verdict[], opts: CheckOptions): boolean {
   const summary = summarize(verdicts, opts);
+  const shown = reportable(verdicts, opts);
+  const failed = summary.failures.length > 0;
 
-  const failConfidence = effectiveFailConfidence(opts);
-  const drifts = verdicts
-    .filter((v) => v.status === "drifted" && v.confidence >= failConfidence)
-    .sort((a, b) => b.confidence - a.confidence);
-
-  if (drifts.length === 0) {
+  if (shown.length === 0) {
     console.log(
-      kleur.green(`\n✓ No doc drift detected.`) +
+      kleur.green(`\n✓ No documentation problems found.`) +
         kleur.dim(
           ` (${summary.ok} claims verified, ${summary.unverifiable} unverifiable)\n`,
         ),
     );
-    return opts.strict && summary.failures.length > 0;
+    return failed;
   }
 
-  console.log(
-    kleur.bold().red(`\n✗ ${drifts.length} doc claim(s) drifted from the code:\n`),
-  );
+  const head =
+    summary.errors > 0
+      ? kleur.bold().red(
+          `\n✗ ${summary.errors} error${summary.errors === 1 ? "" : "s"}` +
+            (summary.warnings ? ` and ${summary.warnings} warning${summary.warnings === 1 ? "" : "s"}` : "") +
+            ` in your docs:\n`,
+        )
+      : kleur.bold().yellow(
+          `\n⚠ ${summary.warnings} warning${summary.warnings === 1 ? "" : "s"} in your docs:\n`,
+        );
+  console.log(head);
 
-  for (const v of drifts) {
+  for (const v of shown) {
+    const mark = (MARK[v.severity] ?? MARK.info)(v.severity === "error" ? "✗" : "⚠");
     const loc = kleur.cyan(`${v.claim.docFile}:${v.claim.line}`);
-    const tag = kleur.dim(`[${v.engine}]`);
-    const conf = kleur.dim(`${Math.round(v.confidence * 100)}%`);
-    console.log(`  ${kleur.red("●")} ${loc} ${tag} ${conf}`);
+    const tag = kleur.dim(`[${v.engine}] ${Math.round(v.confidence * 100)}%`);
+    console.log(`  ${mark} ${loc} ${tag}`);
     console.log(`    ${kleur.bold(v.claim.text)}`);
     console.log(`    ${v.explanation}`);
     if (v.suggestedFix) {
       console.log(`    ${kleur.yellow("fix:")} ${kleur.dim(v.suggestedFix)}`);
-    }
-    if (v.evidence.length) {
-      const e = v.evidence[0];
-      console.log(kleur.dim(`    seen: ${e.file}:${e.line}  ${e.snippet}`));
     }
     console.log();
   }
 
   console.log(
     kleur.dim(
-      `${summary.ok} ok · ${summary.drifted} drifted · ${summary.unverifiable} unverifiable\n`,
+      `${summary.ok} ok · ${summary.drifted} drifted · ${summary.undocumented} undocumented · ${summary.unverifiable} unverifiable`,
     ),
   );
-  return true;
+  if (!failed) {
+    console.log(
+      kleur.dim(`warnings only — build passes (raise --fail-on to enforce)\n`),
+    );
+  } else {
+    console.log();
+  }
+  return failed;
 }
 
 // GitHub workflow commands need %/CR/LF escaped in data, and additionally
@@ -88,14 +137,14 @@ const escData = (s: string): string =>
 const escProp = (s: string): string =>
   escData(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
 
-/** GitHub Actions workflow-command annotations. */
+/** GitHub Actions annotations: errors as ::error, everything else as ::warning. */
 export function printGithubAnnotations(verdicts: Verdict[], opts: CheckOptions): void {
-  const failConfidence = effectiveFailConfidence(opts);
-  for (const v of verdicts) {
-    if (v.status !== "drifted" || v.confidence < failConfidence) continue;
-    const msg = `doc drift: ${v.claim.text} — ${v.explanation}`;
+  for (const v of reportable(verdicts, opts)) {
+    const level = v.severity === "error" ? "error" : "warning";
+    const label = v.status === "undocumented" ? "undocumented" : "doc drift";
+    const msg = `${label}: ${v.claim.text} — ${v.explanation}`;
     console.log(
-      `::error file=${escProp(v.claim.docFile)},line=${v.claim.line},title=docverity::${escData(msg)}`,
+      `::${level} file=${escProp(v.claim.docFile)},line=${v.claim.line},title=docverity::${escData(msg)}`,
     );
   }
 }
@@ -107,7 +156,10 @@ export function toJson(verdicts: Verdict[], opts: CheckOptions): string {
       summary: {
         ok: summary.ok,
         drifted: summary.drifted,
+        undocumented: summary.undocumented,
         unverifiable: summary.unverifiable,
+        errors: summary.errors,
+        warnings: summary.warnings,
         failed: summary.failures.length,
       },
       verdicts: verdicts.map((v) => ({
@@ -116,6 +168,7 @@ export function toJson(verdicts: Verdict[], opts: CheckOptions): string {
         kind: v.claim.kind,
         text: v.claim.text,
         status: v.status,
+        severity: v.severity,
         confidence: v.confidence,
         engine: v.engine,
         explanation: v.explanation,

@@ -24,8 +24,14 @@ Docverity ships with two complementary engines:
 - **Claim verifier** — LLM-backed, catches prose-level semantic drift: "the
   default timeout is 30s", "this returns a list", "set `FOO=bar` to enable X".
   Runs when `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) is set.
+- **Coverage** — the reverse direction: flags and environment variables the
+  code uses that the docs never mention. On by default, reported as warnings.
 
 Works free out of the box. Gets smarter with a key.
+
+Every finding has a **severity**: `error` (a reader acts on it and gets burned)
+or `warning` (real but not blocking). By default only errors fail the build, so
+a slight issue is reported without breaking CI. Tune it with `--fail-on`.
 
 ## Install
 
@@ -64,16 +70,19 @@ docverity --no-llm
 
 | Flag | Description |
 | --- | --- |
+| `-C, --root <dir>` | Repo root to check (default: current directory). |
 | `--no-llm` | Deterministic checks only; no API calls. |
 | `--model <id>` | Model for the LLM engine (default `claude-opus-4-8`). |
-| `--fail-confidence <n>` | Minimum confidence (0..1) to fail the build on. Default `0.7`. |
+| `--no-coverage` | Skip the code-to-docs check for undocumented flags/env vars. |
+| `--fail-confidence <n>` | Minimum confidence (0..1) to report a finding. Default `0.7`. |
+| `--fail-on <level>` | Lowest severity that fails the build: `error` (default), `warning`, `info`, or `none`. |
 | `--strict` | Also fail on unverifiable claims. |
 | `--format <fmt>` | `pretty` (default), `json`, or `github`. |
 
-Docverity exits non-zero when it finds drift above the confidence threshold, so
-it fails CI the way a linter would. Exit codes: `0` clean, `1` drift found,
-`2` a configuration error (e.g. an invalid `--fail-confidence` or a missing doc
-file) so a typo can never mask real drift with a green build.
+Docverity fails CI the way a linter would. Exit codes: `0` clean (or warnings
+only), `1` a finding at or above `--fail-on` severity, `2` a configuration error
+(e.g. an invalid `--fail-confidence`/`--fail-on` or a missing doc file) so a
+typo can never mask real drift with a green build.
 
 ## In CI (GitHub Actions)
 

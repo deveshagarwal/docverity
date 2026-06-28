@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { Claim, Evidence, Verdict, Status } from "./types.js";
+import type { Claim, Evidence, Verdict, Status, Severity } from "./types.js";
 import { searchLiteral } from "./search.js";
 import { structuredCall } from "./llm.js";
+import { defaultSeverity } from "./severity.js";
 
 const EXTRACT_SYSTEM = `You extract verifiable factual claims that a documentation file makes about a software codebase.
 
@@ -19,7 +20,9 @@ For each claim, decide:
 - "drifted": the evidence contradicts the claim (the docs are now wrong).
 - "unverifiable": the evidence is insufficient to decide.
 
-Be conservative. Only mark "drifted" when the evidence affirmatively shows a DIFFERENT value or behavior than the claim states. Absence of evidence is NEVER drift: if the evidence array is empty, or does not actually mention the claim's subject, you MUST return "unverifiable". A false "drifted" verdict is worse than a missed one. Give the specific contradiction and, when drifted, a concrete suggested doc fix.`;
+Be conservative. Only mark "drifted" when the evidence affirmatively shows a DIFFERENT value or behavior than the claim states. Absence of evidence is NEVER drift: if the evidence array is empty, or does not actually mention the claim's subject, you MUST return "unverifiable". A false "drifted" verdict is worse than a missed one. Give the specific contradiction and, when drifted, a concrete suggested doc fix.
+
+Also rate severity for drifted claims: "error" if a reader would be actively misled and break (a wrong default value, a wrong return type, a command/step that won't work); "warning" if it is stale but unlikely to break anything (an out-of-date aside, an approximate description). Use "info" for anything you mark unverifiable.`;
 
 interface RawProseClaim {
   line: number;
@@ -31,6 +34,7 @@ interface RawProseClaim {
 interface RawVerdict {
   id: string;
   status: Status;
+  severity?: Severity;
   confidence: number;
   explanation: string;
   suggestedFix?: string;
@@ -70,11 +74,12 @@ const VERIFY_SCHEMA = {
         properties: {
           id: { type: "string" },
           status: { type: "string", enum: ["ok", "drifted", "unverifiable"] },
+          severity: { type: "string", enum: ["error", "warning", "info"] },
           confidence: { type: "number" },
           explanation: { type: "string" },
           suggestedFix: { type: "string" },
         },
-        required: ["id", "status", "confidence", "explanation"],
+        required: ["id", "status", "severity", "confidence", "explanation"],
       },
     },
   },
@@ -134,6 +139,7 @@ export async function verifyLlm(
       out.push({
         claim,
         status: "unverifiable",
+        severity: "info",
         confidence: 0.3,
         explanation: "No code evidence located for this claim.",
         evidence: [],
@@ -167,6 +173,7 @@ export async function verifyLlm(
     out.push({
       claim,
       status: v.status,
+      severity: v.severity ?? defaultSeverity(v.status, "prose"),
       confidence: v.confidence,
       explanation: v.explanation,
       suggestedFix: v.suggestedFix,

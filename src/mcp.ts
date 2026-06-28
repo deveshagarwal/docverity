@@ -8,9 +8,11 @@ import {
 import type { Verdict } from "./types.js";
 import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
+import { findUndocumented } from "./coverage.js";
 import { verifyLlm } from "./verify-llm.js";
 import { hasApiKey } from "./llm.js";
 import { discoverDocs } from "./discover.js";
+import { severityRank } from "./severity.js";
 
 // The description is the agent's selection signal: it must say *when* to call
 // the tool, not just what it does. Recent models under-reach for tools, so the
@@ -39,9 +41,14 @@ const CHECK_INPUT_SCHEMA = {
       description:
         "Also run the LLM prose verifier (needs ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN). Default false.",
     },
+    coverage: {
+      type: "boolean",
+      description:
+        "Also report flags/env vars the code uses but the docs never mention. Default true.",
+    },
     failConfidence: {
       type: "number",
-      description: "Minimum confidence (0..1) for a drift to be reported. Default 0.7.",
+      description: "Minimum confidence (0..1) for a finding to be reported. Default 0.7.",
     },
   },
 };
@@ -53,7 +60,8 @@ interface Finding {
   line: number;
   kind: string;
   text: string;
-  status: "drifted" | "unverifiable";
+  status: "drifted" | "undocumented";
+  severity: string;
   confidence: number;
   engine: string;
   explanation: string;
@@ -65,6 +73,7 @@ async function runCheck(args: {
   root?: string;
   docs?: string[];
   llm?: boolean;
+  coverage?: boolean;
   failConfidence?: number;
 }): Promise<{ summary: Record<string, unknown>; findings: Finding[]; note?: string }> {
   const root = path.resolve(args.root ?? process.cwd());
@@ -72,6 +81,7 @@ async function runCheck(args: {
   const failConfidence = args.failConfidence ?? 0.7;
   const wantLlm = Boolean(args.llm);
   const useLlm = wantLlm && hasApiKey();
+  const wantCoverage = args.coverage !== false;
 
   const verdicts: Verdict[] = [];
   let llmRan = false;
@@ -89,19 +99,33 @@ async function runCheck(args: {
       }
     }
   }
+  if (wantCoverage) {
+    try {
+      verdicts.push(...findUndocumented(root, docFiles));
+    } catch {
+      /* coverage is best-effort */
+    }
+  }
 
   let ok = 0;
   let drifted = 0;
   let unverifiable = 0;
+  let undocumented = 0;
   const findings: Finding[] = [];
   for (const v of verdicts) {
     if (v.status === "ok") ok++;
     else if (v.status === "drifted") drifted++;
+    else if (v.status === "undocumented") undocumented++;
     else unverifiable++;
 
-    // Only surface actionable drift; unverifiable claims stay in the counts but
-    // would be noise for an agent to act on.
-    if (!(v.status === "drifted" && v.confidence >= failConfidence)) continue;
+    // Surface actionable drift and coverage gaps; unverifiable claims stay in
+    // the counts but would be noise for an agent to act on.
+    if (
+      !((v.status === "drifted" || v.status === "undocumented") &&
+        v.confidence >= failConfidence)
+    ) {
+      continue;
+    }
 
     findings.push({
       doc: v.claim.docFile,
@@ -109,6 +133,7 @@ async function runCheck(args: {
       kind: v.claim.kind,
       text: v.claim.text,
       status: v.status,
+      severity: v.severity,
       confidence: Number(v.confidence.toFixed(2)),
       engine: v.engine,
       explanation: v.explanation,
@@ -117,11 +142,12 @@ async function runCheck(args: {
     });
   }
 
-  // Drifted first, then by confidence — the agent should act on these top-down.
-  findings.sort((a, b) => {
-    if (a.status !== b.status) return a.status === "drifted" ? -1 : 1;
-    return b.confidence - a.confidence;
-  });
+  // Errors first, then by confidence — the agent should act on these top-down.
+  findings.sort(
+    (a, b) =>
+      severityRank(b.severity as any) - severityRank(a.severity as any) ||
+      b.confidence - a.confidence,
+  );
 
   const truncated = findings.length > MAX_FINDINGS;
   const shown = findings.slice(0, MAX_FINDINGS);
@@ -147,6 +173,7 @@ async function runCheck(args: {
       docsChecked: docFiles,
       ok,
       drifted,
+      undocumented,
       unverifiable,
       engine: useLlm && llmRan ? "reference+llm" : "reference",
     },

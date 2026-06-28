@@ -202,6 +202,48 @@ function fallbackSearch(
   return out;
 }
 
+export interface SourceFile {
+  file: string;
+  content: string;
+}
+
+/** Read every non-doc source file under the repo (for code -> docs coverage). */
+export function readSourceFiles(root: string, limitBytes = 2 * 1024 * 1024): SourceFile[] {
+  const out: SourceFile[] = [];
+  const walk = (dir: string) => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (IGNORE_DIRS.includes(entry)) continue;
+      const full = path.join(dir, entry);
+      let st;
+      try {
+        st = statSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        walk(full);
+      } else if (st.isFile() && st.size < limitBytes && !isDocFile(full)) {
+        let content: string;
+        try {
+          content = readFileSync(full, "utf8");
+        } catch {
+          continue;
+        }
+        if (content.includes("\u0000")) continue; // skip binary files
+        out.push({ file: path.relative(root, full), content });
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
 /** Resolve a documented path claim against the filesystem, contained to the repo. */
 export function fileExists(root: string, relPath: string): boolean {
   const clean = relPath.replace(/^\.\//, "").replace(/[`*]/g, "");

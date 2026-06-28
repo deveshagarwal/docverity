@@ -5,7 +5,7 @@ Output docs/demo.gif
 Set Shell bash
 Set FontSize 18
 Set Width 1560
-Set Height 600
+Set Height 880
 Set Padding 22
 Set Theme "Dracula"
 Set WindowBar Colorful
