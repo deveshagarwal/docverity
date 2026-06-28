@@ -1,6 +1,6 @@
 {
   "name": "docverity",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "AI made documentation rot an epidemic. Docverity checks your docs' claims against the source and fails CI when they drift. Also runs as an MCP tool for coding agents.",
   "type": "module",
   "bin": {
