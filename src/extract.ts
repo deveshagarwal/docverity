@@ -6,7 +6,10 @@ import type { Claim, ClaimKind } from "./types.js";
 // deterministically against the source tree.
 const FLAG_RE = /(^|[\s(`"'])(--[a-zA-Z][a-zA-Z0-9-]+)/g;
 const ENV_RE = /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,})\b/g;
-const PATH_RE = /([\w./-]+\/[\w./-]+\.[a-zA-Z0-9]+|[\w-]+\.[a-zA-Z]{2,4})/g;
+// Either a slash path (a/b.ext) or a (possibly multi-dot) filename (app.config.ts).
+// The multi-dot form keeps whole filenames intact instead of fragmenting them.
+const PATH_RE =
+  /([\w./-]+\/[\w./-]+\.[a-zA-Z0-9]+|[\w-]+(?:\.[\w-]+)*\.[a-zA-Z][a-zA-Z0-9]{0,8})\b/g;
 
 // Common English ALL_CAPS that are not env vars.
 const ENV_STOPWORDS = new Set([
@@ -24,8 +27,19 @@ const ENV_STOPWORDS = new Set([
   "README",
 ]);
 
-// File-ish tokens that are usually prose, not real paths.
-const PATH_STOPWORDS = new Set(["e.g.", "i.e.", "etc.", "vs.", "a.k.a."]);
+// File-ish tokens that are usually prose, not real paths. Both the
+// trailing-dot and bare forms, since PATH_RE can match either.
+const PATH_STOPWORDS = new Set([
+  "e.g.",
+  "i.e.",
+  "etc.",
+  "vs.",
+  "a.k.a.",
+  "e.g",
+  "i.e",
+  "a.k.a",
+  "vs",
+]);
 
 /** Extract deterministically-checkable claims from a single doc file. */
 export function extractClaims(root: string, docFile: string): Claim[] {
@@ -88,30 +102,31 @@ export function extractClaims(root: string, docFile: string): Claim[] {
       continue;
     }
 
-    // Outside code: scan inline code spans plus the raw line for tokens.
+    // Flags are distinctive (the -- prefix), so they can be claimed from prose.
+    // Env vars, paths, and symbols only count inside inline code spans — raw
+    // prose has too many ALL_CAPS words and dotted phrases to scan safely.
     const inlineSpans = [...line.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
-    const scanText = line;
 
-    for (const m of scanText.matchAll(FLAG_RE)) {
+    for (const m of line.matchAll(FLAG_RE)) {
       const flag = m[2];
       push("flag", lineNo, flag, `the CLI flag ${flag} exists`, [flag]);
     }
 
-    for (const m of scanText.matchAll(ENV_RE)) {
-      const env = m[1];
-      if (ENV_STOPWORDS.has(env)) continue;
-      push("env", lineNo, env, `the environment variable ${env} is used`, [env]);
-    }
-
-    // Only treat path-looking tokens inside inline code as path claims, to
-    // avoid matching ordinary prose words with dots.
     for (const span of inlineSpans) {
+      for (const m of span.matchAll(ENV_RE)) {
+        const env = m[1];
+        if (ENV_STOPWORDS.has(env)) continue;
+        push("env", lineNo, env, `the environment variable ${env} is used`, [env]);
+      }
+
       for (const m of span.matchAll(PATH_RE)) {
         const p = m[1];
         if (PATH_STOPWORDS.has(p)) continue;
         if (p.startsWith("--")) continue;
+        if (p.startsWith("/")) continue; // absolute/home path, not a repo file
         push("file", lineNo, p, `the path ${p} exists`, [p]);
       }
+
       // A bare identifier in backticks used like a function call.
       const callMatch = span.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\(\)?$/);
       if (callMatch) {

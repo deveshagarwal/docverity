@@ -44,7 +44,7 @@
     "url": "https://github.com/deveshagarwal/docverity/issues"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.70.0",
+    "@anthropic-ai/sdk": "^0.106.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "kleur": "^4.1.5"

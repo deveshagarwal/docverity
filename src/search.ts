@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Evidence } from "./types.js";
 
@@ -29,6 +29,20 @@ function isDocFile(file: string): boolean {
   return DOC_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
+// How a token is matched against the source:
+//  - "literal": plain substring (used to gather evidence for the LLM engine)
+//  - "word":    whole-token match for env vars and symbols (API_KEY != API_KEY_V2)
+//  - "flag":    flag-token match where '-' is part of the token (--json != --json-output)
+export type MatchMode = "literal" | "word" | "flag";
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function flagPattern(token: string): string {
+  return `(^|[^A-Za-z0-9-])${escapeRegex(token)}([^A-Za-z0-9-]|$)`;
+}
+
 let rgChecked = false;
 let rgAvailable = false;
 
@@ -44,44 +58,69 @@ async function hasRipgrep(): Promise<boolean> {
   return rgAvailable;
 }
 
-/**
- * Search the repo for a literal string. Returns up to `limit` evidence hits.
- * Uses ripgrep when available, falling back to a Node-based walk otherwise.
- */
-export async function searchLiteral(
+/** Plain substring search. Used to gather evidence for the LLM engine. */
+export function searchLiteral(root: string, needle: string, limit = 8): Promise<Evidence[]> {
+  return runSearch(root, needle, "literal", limit);
+}
+
+/** Boundary-aware search used by the deterministic verifier. */
+export function searchToken(
   root: string,
-  needle: string,
+  token: string,
+  mode: MatchMode,
   limit = 8,
 ): Promise<Evidence[]> {
+  return runSearch(root, token, mode, limit);
+}
+
+async function runSearch(
+  root: string,
+  needle: string,
+  mode: MatchMode,
+  limit: number,
+): Promise<Evidence[]> {
   if (!needle.trim()) return [];
+  if (await hasRipgrep()) return rgSearch(root, needle, mode, limit);
+  return fallbackSearch(root, needle, mode, limit);
+}
 
-  if (await hasRipgrep()) {
-    const args = [
-      "--fixed-strings",
-      "--line-number",
-      "--no-heading",
-      "--color",
-      "never",
-      "--max-count",
-      String(limit),
-    ];
-    for (const dir of IGNORE_DIRS) args.push("--glob", `!${dir}/`);
-    for (const ext of DOC_EXTENSIONS) args.push("--glob", `!*${ext}`);
-    args.push("--", needle, ".");
-    try {
-      const { stdout } = await execFileAsync("rg", args, {
-        cwd: root,
-        maxBuffer: 8 * 1024 * 1024,
-      });
-      return parseRgOutput(stdout, limit);
-    } catch (err: any) {
-      // rg exits 1 when there are no matches; that is not an error for us.
-      if (err?.code === 1) return [];
-      throw err;
-    }
+async function rgSearch(
+  root: string,
+  needle: string,
+  mode: MatchMode,
+  limit: number,
+): Promise<Evidence[]> {
+  const args = [
+    "--line-number",
+    "--no-heading",
+    "--color",
+    "never",
+    "--max-count",
+    String(limit),
+  ];
+  for (const dir of IGNORE_DIRS) args.push("--glob", `!${dir}/`);
+  for (const ext of DOC_EXTENSIONS) args.push("--glob", `!*${ext}`);
+
+  if (mode === "flag") {
+    args.push("--regexp", flagPattern(needle));
+  } else if (mode === "word") {
+    args.push("--fixed-strings", "--word-regexp", "--regexp", needle);
+  } else {
+    args.push("--fixed-strings", "--regexp", needle);
   }
+  args.push("--", ".");
 
-  return fallbackSearch(root, needle, limit);
+  try {
+    const { stdout } = await execFileAsync("rg", args, {
+      cwd: root,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return parseRgOutput(stdout, limit);
+  } catch (err: any) {
+    // rg exits 1 when there are no matches; that is not an error for us.
+    if (err?.code === 1) return [];
+    throw err;
+  }
 }
 
 function parseRgOutput(stdout: string, limit: number): Evidence[] {
@@ -92,7 +131,7 @@ function parseRgOutput(stdout: string, limit: number): Evidence[] {
     const first = raw.indexOf(":");
     const second = raw.indexOf(":", first + 1);
     if (first < 0 || second < 0) continue;
-    const file = raw.slice(0, first);
+    const file = raw.slice(0, first).replace(/^\.\//, "");
     const line = Number(raw.slice(first + 1, second));
     const snippet = raw.slice(second + 1).trim();
     out.push({ file, line, snippet: snippet.slice(0, 200) });
@@ -101,9 +140,22 @@ function parseRgOutput(stdout: string, limit: number): Evidence[] {
   return out;
 }
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+function matcherFor(needle: string, mode: MatchMode): (line: string) => boolean {
+  if (mode === "literal") return (line) => line.includes(needle);
+  const re =
+    mode === "flag"
+      ? new RegExp(flagPattern(needle))
+      : new RegExp(`\\b${escapeRegex(needle)}\\b`);
+  return (line) => re.test(line);
+}
 
-function fallbackSearch(root: string, needle: string, limit: number): Evidence[] {
+function fallbackSearch(
+  root: string,
+  needle: string,
+  mode: MatchMode,
+  limit: number,
+): Evidence[] {
+  const matches = matcherFor(needle, mode);
   const out: Evidence[] = [];
   const walk = (dir: string) => {
     if (out.length >= limit) return;
@@ -134,7 +186,7 @@ function fallbackSearch(root: string, needle: string, limit: number): Evidence[]
         }
         const lines = content.split("\n");
         for (let i = 0; i < lines.length; i++) {
-          if (lines[i].includes(needle)) {
+          if (matches(lines[i])) {
             out.push({
               file: path.relative(root, full),
               line: i + 1,
@@ -150,8 +202,12 @@ function fallbackSearch(root: string, needle: string, limit: number): Evidence[]
   return out;
 }
 
-/** Resolve a documented path claim against the filesystem. */
+/** Resolve a documented path claim against the filesystem, contained to the repo. */
 export function fileExists(root: string, relPath: string): boolean {
   const clean = relPath.replace(/^\.\//, "").replace(/[`*]/g, "");
-  return existsSync(path.join(root, clean));
+  const base = path.resolve(root);
+  const target = path.resolve(base, clean);
+  // Don't let "../../etc/passwd" style references probe outside the repo.
+  if (target !== base && !target.startsWith(base + path.sep)) return false;
+  return existsSync(target);
 }

@@ -8,7 +8,13 @@ export interface Summary {
   failures: Verdict[];
 }
 
+/** A non-finite threshold must never silently pass all drift; fall back to 0.7. */
+export function effectiveFailConfidence(opts: CheckOptions): number {
+  return Number.isFinite(opts.failConfidence) ? opts.failConfidence : 0.7;
+}
+
 export function summarize(verdicts: Verdict[], opts: CheckOptions): Summary {
+  const failConfidence = effectiveFailConfidence(opts);
   let ok = 0;
   let drifted = 0;
   let unverifiable = 0;
@@ -18,7 +24,7 @@ export function summarize(verdicts: Verdict[], opts: CheckOptions): Summary {
     if (v.status === "ok") ok++;
     else if (v.status === "drifted") {
       drifted++;
-      if (v.confidence >= opts.failConfidence) failures.push(v);
+      if (v.confidence >= failConfidence) failures.push(v);
     } else {
       unverifiable++;
       if (opts.strict) failures.push(v);
@@ -31,8 +37,9 @@ export function summarize(verdicts: Verdict[], opts: CheckOptions): Summary {
 export function printReport(verdicts: Verdict[], opts: CheckOptions): boolean {
   const summary = summarize(verdicts, opts);
 
+  const failConfidence = effectiveFailConfidence(opts);
   const drifts = verdicts
-    .filter((v) => v.status === "drifted" && v.confidence >= opts.failConfidence)
+    .filter((v) => v.status === "drifted" && v.confidence >= failConfidence)
     .sort((a, b) => b.confidence - a.confidence);
 
   if (drifts.length === 0) {
@@ -74,13 +81,21 @@ export function printReport(verdicts: Verdict[], opts: CheckOptions): boolean {
   return true;
 }
 
+// GitHub workflow commands need %/CR/LF escaped in data, and additionally
+// :/, escaped in property values, or the annotation truncates or mis-targets.
+const escData = (s: string): string =>
+  s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+const escProp = (s: string): string =>
+  escData(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
+
 /** GitHub Actions workflow-command annotations. */
 export function printGithubAnnotations(verdicts: Verdict[], opts: CheckOptions): void {
+  const failConfidence = effectiveFailConfidence(opts);
   for (const v of verdicts) {
-    if (v.status !== "drifted" || v.confidence < opts.failConfidence) continue;
-    const msg = `${v.claim.text} — ${v.explanation}`.replace(/\n/g, " ");
+    if (v.status !== "drifted" || v.confidence < failConfidence) continue;
+    const msg = `doc drift: ${v.claim.text} — ${v.explanation}`;
     console.log(
-      `::error file=${v.claim.docFile},line=${v.claim.line}::doc drift: ${msg}`,
+      `::error file=${escProp(v.claim.docFile)},line=${v.claim.line},title=docverity::${escData(msg)}`,
     );
   }
 }

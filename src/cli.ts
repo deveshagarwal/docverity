@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import kleur from "kleur";
 import type { CheckOptions, Verdict } from "./types.js";
 import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
-import { verifyLlm } from "./verify-llm.js";
 import { hasApiKey } from "./llm.js";
 import { printReport, printGithubAnnotations, toJson, summarize } from "./report.js";
 import { discoverDocs } from "./discover.js";
-import { runMcpServer } from "./mcp.js";
+// verify-llm and mcp pull in heavy SDKs; they are imported lazily, only when used.
 
 const program = new Command();
 
@@ -30,7 +30,33 @@ program
   .option("--format <fmt>", "output format: pretty | json | github", "pretty")
   .action(async (docs: string[], rawOpts) => {
     const root = path.resolve(rawOpts.root);
-    const docFiles = docs.length ? docs : discoverDocs(root);
+
+    // A non-numeric threshold must never silently pass CI. Exit 2 = config error
+    // (distinct from 1 = drift found).
+    const failConfidence = Number(rawOpts.failConfidence);
+    if (!Number.isFinite(failConfidence) || failConfidence < 0 || failConfidence > 1) {
+      console.error(
+        kleur.red(
+          `Invalid --fail-confidence: ${rawOpts.failConfidence} (expected a number between 0 and 1).`,
+        ),
+      );
+      process.exit(2);
+    }
+
+    // Resolve explicit doc args relative to root (path.resolve handles
+    // absolute/cwd-relative); path.relative makes them root-relative for the
+    // extractor and verifier, fixing the old root+arg double-join.
+    const docFiles = docs.length
+      ? docs.map((d) => path.relative(root, path.resolve(d)))
+      : discoverDocs(root);
+
+    if (docs.length) {
+      const missing = docFiles.filter((d) => !existsSync(path.join(root, d)));
+      if (missing.length) {
+        console.error(kleur.red(`Doc file(s) not found: ${missing.join(", ")}`));
+        process.exit(2);
+      }
+    }
 
     if (!docFiles.length) {
       console.error(kleur.yellow("No documentation files found."));
@@ -51,15 +77,22 @@ program
       docFiles,
       useLlm,
       model: rawOpts.model,
-      failConfidence: Number(rawOpts.failConfidence),
+      failConfidence,
       strict: Boolean(rawOpts.strict),
     };
 
+    // Lazy-load the LLM engine (and its SDK) only when actually used.
+    const verifyLlm = useLlm ? (await import("./verify-llm.js")).verifyLlm : null;
+
     const verdicts: Verdict[] = [];
     for (const doc of docFiles) {
-      const claims = extractClaims(root, doc);
-      verdicts.push(...(await verifyReference(root, claims)));
-      if (useLlm) {
+      try {
+        verdicts.push(...(await verifyReference(root, extractClaims(root, doc))));
+      } catch (err: any) {
+        console.error(kleur.yellow(`Cannot check ${doc}: ${err?.message ?? err}`));
+        continue;
+      }
+      if (verifyLlm) {
         try {
           verdicts.push(...(await verifyLlm(root, doc, opts.model)));
         } catch (err: any) {
@@ -88,6 +121,7 @@ program
   .command("mcp")
   .description("Run as an MCP server (stdio) so agents can check docs as a tool.")
   .action(async () => {
+    const { runMcpServer } = await import("./mcp.js");
     await runMcpServer();
   });
 

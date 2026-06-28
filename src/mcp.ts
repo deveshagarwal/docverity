@@ -74,13 +74,18 @@ async function runCheck(args: {
   const useLlm = wantLlm && hasApiKey();
 
   const verdicts: Verdict[] = [];
+  let llmRan = false;
+  let llmError: string | undefined;
   for (const doc of docFiles) {
     verdicts.push(...(await verifyReference(root, extractClaims(root, doc))));
     if (useLlm) {
       try {
         verdicts.push(...(await verifyLlm(root, doc, "claude-opus-4-8")));
-      } catch {
-        // Surface as a note rather than failing the whole call.
+        llmRan = true;
+      } catch (err: any) {
+        // Don't fail the whole tool call; surface it as a note so the agent
+        // knows it got deterministic-only results, not a clean pass.
+        llmError = err?.message ?? String(err);
       }
     }
   }
@@ -94,10 +99,9 @@ async function runCheck(args: {
     else if (v.status === "drifted") drifted++;
     else unverifiable++;
 
-    const include =
-      (v.status === "drifted" && v.confidence >= failConfidence) ||
-      v.status === "unverifiable";
-    if (!include || v.status === "ok") continue;
+    // Only surface actionable drift; unverifiable claims stay in the counts but
+    // would be noise for an agent to act on.
+    if (!(v.status === "drifted" && v.confidence >= failConfidence)) continue;
 
     findings.push({
       doc: v.claim.docFile,
@@ -123,11 +127,19 @@ async function runCheck(args: {
   const shown = findings.slice(0, MAX_FINDINGS);
 
   let note: string | undefined;
+  const addNote = (s: string) => {
+    note = note ? `${note} ${s}` : s;
+  };
   if (wantLlm && !hasApiKey()) {
-    note = "llm=true was requested but no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is set; ran deterministic checks only.";
+    addNote(
+      "llm=true was requested but no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is set; ran deterministic checks only.",
+    );
+  }
+  if (llmError) {
+    addNote(`LLM prose verifier failed: ${llmError}; reported deterministic results only.`);
   }
   if (truncated) {
-    note = `${note ? note + " " : ""}Showing ${MAX_FINDINGS} of ${findings.length} findings.`;
+    addNote(`Showing ${MAX_FINDINGS} of ${findings.length} findings.`);
   }
 
   return {
@@ -136,7 +148,7 @@ async function runCheck(args: {
       ok,
       drifted,
       unverifiable,
-      engine: useLlm ? "reference+llm" : "reference",
+      engine: useLlm && llmRan ? "reference+llm" : "reference",
     },
     findings: shown,
     note,
@@ -167,16 +179,25 @@ export async function runMcpServer(): Promise<void> {
         content: [{ type: "text", text: `Unknown tool: ${req.params.name}` }],
       };
     }
-    const result = await runCheck((req.params.arguments ?? {}) as any);
-    const headline =
-      result.findings.length === 0
-        ? "No doc drift detected."
-        : `${result.findings.length} documentation claim(s) need attention.`;
-    return {
-      content: [
-        { type: "text", text: `${headline}\n\n${JSON.stringify(result, null, 2)}` },
-      ],
-    };
+    try {
+      const result = await runCheck((req.params.arguments ?? {}) as any);
+      const headline =
+        result.findings.length === 0
+          ? "No doc drift detected."
+          : `${result.findings.length} documentation claim(s) need attention.`;
+      return {
+        content: [
+          { type: "text", text: `${headline}\n\n${JSON.stringify(result, null, 2)}` },
+        ],
+      };
+    } catch (err: any) {
+      return {
+        isError: true,
+        content: [
+          { type: "text", text: `docverity check failed: ${err?.message ?? err}` },
+        ],
+      };
+    }
   });
 
   await server.connect(new StdioServerTransport());

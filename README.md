@@ -69,7 +69,9 @@ docverity --no-llm
 | `--format <fmt>` | `pretty` (default), `json`, or `github`. |
 
 Docverity exits non-zero when it finds drift above the confidence threshold, so
-it fails CI the way a linter would.
+it fails CI the way a linter would. Exit codes: `0` clean, `1` drift found,
+`2` a configuration error (e.g. an invalid `--fail-confidence` or a missing doc
+file) so a typo can never mask real drift with a green build.
 
 ## In CI (GitHub Actions)
 

@@ -1,5 +1,5 @@
 import type { Claim, Verdict } from "./types.js";
-import { searchLiteral, fileExists } from "./search.js";
+import { searchToken, fileExists } from "./search.js";
 
 /**
  * The deterministic engine: verify each claim by looking for hard evidence in
@@ -20,27 +20,39 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
 
   switch (claim.kind) {
     case "file": {
-      const exists = fileExists(root, claim.text);
-      return exists
-        ? {
-            ...base,
-            status: "ok",
-            confidence: 0.95,
-            explanation: `${claim.text} exists on disk.`,
-          }
-        : {
-            ...base,
-            status: "drifted",
-            confidence: 0.9,
-            explanation: `The docs reference ${claim.text}, but no such file or directory exists.`,
-            suggestedFix: `Update or remove the reference to ${claim.text}.`,
-          };
+      if (fileExists(root, claim.text)) {
+        return {
+          ...base,
+          status: "ok",
+          confidence: 0.95,
+          explanation: `${claim.text} exists on disk.`,
+        };
+      }
+      // A bare filename with no path separator is often a library or framework
+      // name in code formatting (Node.js, config.js), not a repo file. Don't
+      // assert drift on those; downgrade to unverifiable.
+      if (!claim.text.includes("/")) {
+        return {
+          ...base,
+          status: "unverifiable",
+          confidence: 0.3,
+          explanation: `${claim.text} is not a file in the repo; it may be a library or framework name rather than a path.`,
+        };
+      }
+      return {
+        ...base,
+        status: "drifted",
+        confidence: 0.9,
+        explanation: `The docs reference ${claim.text}, but no such file or directory exists.`,
+        suggestedFix: `Update or remove the reference to ${claim.text}.`,
+      };
     }
 
     case "flag":
     case "env":
     case "symbol": {
-      const hits = await searchLiteral(root, claim.text);
+      const mode = claim.kind === "flag" ? "flag" : "word";
+      const hits = await searchToken(root, claim.text, mode);
       if (hits.length > 0) {
         return {
           ...base,
@@ -56,10 +68,12 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
           : claim.kind === "env"
             ? "environment variable"
             : "symbol";
+      // Boundary-aware search (below) means a hit is a real, whole-token match,
+      // so a miss is trustworthy enough to fail CI on, symbols included.
       return {
         ...base,
         status: "drifted",
-        confidence: claim.kind === "symbol" ? 0.6 : 0.8,
+        confidence: 0.8,
         explanation: `The docs mention the ${noun} ${claim.text}, but it does not appear anywhere in the source.`,
         suggestedFix: `Verify ${claim.text} still exists; it may have been renamed or removed.`,
       };

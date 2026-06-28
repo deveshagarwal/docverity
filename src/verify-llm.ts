@@ -8,6 +8,8 @@ const EXTRACT_SYSTEM = `You extract verifiable factual claims that a documentati
 
 A claim is a specific, checkable assertion: a default value, a return type, a parameter name, a config key, an install step, a behavior ("by default X happens"), an output shape. Ignore marketing copy, aspirational statements, and anything not checkable against source code.
 
+Do NOT emit bare flag/env-var/file-path/function-name existence claims (e.g. "the --json flag exists", "see src/foo.ts") — a separate deterministic engine already checks those, and re-reporting them causes duplicates. Focus on semantic prose claims: values, behaviors, types, defaults.
+
 For each claim, provide search terms (identifiers, strings, file names) that would help locate the relevant code. Be precise; prefer fewer high-quality claims over many vague ones.`;
 
 const VERIFY_SYSTEM = `You verify whether documentation claims still match the codebase, given source-code evidence.
@@ -17,7 +19,7 @@ For each claim, decide:
 - "drifted": the evidence contradicts the claim (the docs are now wrong).
 - "unverifiable": the evidence is insufficient to decide.
 
-Be conservative. Only mark "drifted" when the evidence clearly contradicts the claim. When unsure, choose "unverifiable". A false "drifted" verdict is worse than a missed one. Give the specific contradiction and, when drifted, a concrete suggested doc fix.`;
+Be conservative. Only mark "drifted" when the evidence affirmatively shows a DIFFERENT value or behavior than the claim states. Absence of evidence is NEVER drift: if the evidence array is empty, or does not actually mention the claim's subject, you MUST return "unverifiable". A false "drifted" verdict is worse than a missed one. Give the specific contradiction and, when drifted, a concrete suggested doc fix.`;
 
 interface RawProseClaim {
   line: number;
@@ -121,7 +123,30 @@ export async function verifyLlm(
     evidenceByClaim.set(claim.id, dedupeEvidence(found).slice(0, 8));
   }
 
-  const verifyPayload = claims.map((c) => ({
+  const out: Verdict[] = [];
+
+  // Claims with no located evidence are NOT sent to the model: handing it an
+  // empty evidence array invites "absent, therefore drifted" hallucinations.
+  // Without evidence the claim is unverifiable by definition.
+  const grounded: Claim[] = [];
+  for (const claim of claims) {
+    if ((evidenceByClaim.get(claim.id) ?? []).length === 0) {
+      out.push({
+        claim,
+        status: "unverifiable",
+        confidence: 0.3,
+        explanation: "No code evidence located for this claim.",
+        evidence: [],
+        engine: "llm",
+      });
+    } else {
+      grounded.push(claim);
+    }
+  }
+
+  if (grounded.length === 0) return out;
+
+  const verifyPayload = grounded.map((c) => ({
     id: c.id,
     claim: c.assertion,
     docText: c.text,
@@ -135,8 +160,7 @@ export async function verifyLlm(
     VERIFY_SCHEMA,
   );
 
-  const byId = new Map(claims.map((c) => [c.id, c]));
-  const out: Verdict[] = [];
+  const byId = new Map(grounded.map((c) => [c.id, c]));
   for (const v of rawVerdicts) {
     const claim = byId.get(v.id);
     if (!claim) continue;
