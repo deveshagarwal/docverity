@@ -1,0 +1,56 @@
+{
+  "name": "docverity",
+  "version": "0.1.0",
+  "description": "Catch documentation that lies about your code. Verify that your docs' claims still match the source, in CI.",
+  "type": "module",
+  "bin": {
+    "docverity": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "documentation",
+    "docs",
+    "drift",
+    "ci",
+    "readme",
+    "doc-rot",
+    "lint",
+    "ai",
+    "claude",
+    "mcp",
+    "model-context-protocol",
+    "agent"
+  ],
+  "author": "Devesh Agarwal",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deveshagarwal/docverity.git"
+  },
+  "homepage": "https://github.com/deveshagarwal/docverity#readme",
+  "bugs": {
+    "url": "https://github.com/deveshagarwal/docverity/issues"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^12.1.0",
+    "kleur": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
