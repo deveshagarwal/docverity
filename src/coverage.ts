@@ -1,7 +1,57 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import type { Verdict, ClaimKind } from "./types.js";
 import { readSourceFiles } from "./search.js";
+
+// All documentation formats — coverage's "is this documented?" check must read
+// .rst/.txt/etc. too, or a Python project that documents its env vars in Sphinx
+// .rst files looks like it documents nothing.
+const DOC_EXTENSIONS = [".md", ".markdown", ".mdx", ".rst", ".txt", ".adoc", ".rdoc", ".org"];
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", "out", "coverage", ".next", ".venv", "vendor",
+]);
+
+/** Concatenate every documentation file in the repo, for membership checks. */
+function allDocText(root: string): string {
+  const parts: string[] = [];
+  let budget = 8_000_000;
+  const walk = (dir: string) => {
+    if (budget <= 0) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (SKIP_DIRS.has(entry)) continue;
+      const full = path.join(dir, entry);
+      let st;
+      try {
+        st = statSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        walk(full);
+      } else if (
+        st.isFile() &&
+        st.size < 2_000_000 &&
+        DOC_EXTENSIONS.some((ext) => entry.toLowerCase().endsWith(ext))
+      ) {
+        try {
+          const c = readFileSync(full, "utf8");
+          parts.push(c);
+          budget -= c.length;
+        } catch {
+          /* skip */
+        }
+      }
+    }
+  };
+  walk(root);
+  return parts.join("\n");
+}
 
 // Code that reads an environment variable, across common languages.
 const ENV_PATTERNS: RegExp[] = [
@@ -99,15 +149,11 @@ function lineOf(content: string, index: number): number {
  * as warnings and do not fail the build by default.
  */
 export function findUndocumented(root: string, docFiles: string[]): Verdict[] {
-  // What the docs mention, as one blob for membership checks.
-  let docText = "";
-  for (const doc of docFiles) {
-    try {
-      docText += "\n" + readFileSync(path.join(root, doc), "utf8");
-    } catch {
-      /* ignore unreadable docs */
-    }
-  }
+  // What the docs mention, across every doc format in the repo (not just the
+  // .md files being drift-checked) — an env var documented in a .rst file is
+  // documented, even if we only drift-check Markdown.
+  void docFiles;
+  const docText = allDocText(root);
 
   const found = new Map<string, Found>(); // key `${kind}:${text}` -> first hit
   const record = (kind: ClaimKind, text: string, file: string, line: number) => {
