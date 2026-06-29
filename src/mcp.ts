@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -13,6 +14,19 @@ import { verifyLlm } from "./verify-llm.js";
 import { hasApiKey } from "./llm.js";
 import { discoverDocs } from "./discover.js";
 import { severityRank } from "./severity.js";
+import { adjudicate, type Sampler, type Candidate } from "./adjudicate.js";
+
+/** A few lines of context around a finding's location, for the adjudicator. */
+function contextLines(root: string, file: string, line: number, radius = 3): string {
+  try {
+    const lines = readFileSync(path.join(root, file), "utf8").split("\n");
+    const from = Math.max(0, line - 1 - radius);
+    const to = Math.min(lines.length, line + radius);
+    return lines.slice(from, to).join("\n");
+  } catch {
+    return "";
+  }
+}
 
 // The description is the agent's selection signal: it must say *when* to call
 // the tool, not just what it does. Recent models under-reach for tools, so the
@@ -69,13 +83,16 @@ interface Finding {
   evidence?: string;
 }
 
-async function runCheck(args: {
-  root?: string;
-  docs?: string[];
-  llm?: boolean;
-  coverage?: boolean;
-  failConfidence?: number;
-}): Promise<{ summary: Record<string, unknown>; findings: Finding[]; note?: string }> {
+async function runCheck(
+  args: {
+    root?: string;
+    docs?: string[];
+    llm?: boolean;
+    coverage?: boolean;
+    failConfidence?: number;
+  },
+  sampler?: Sampler,
+): Promise<{ summary: Record<string, unknown>; findings: Finding[]; note?: string }> {
   const root = path.resolve(args.root ?? process.cwd());
   const docFiles = args.docs?.length ? args.docs : discoverDocs(root);
   const failConfidence = args.failConfidence ?? 0.7;
@@ -142,6 +159,40 @@ async function runCheck(args: {
     });
   }
 
+  // Host-LLM adjudication: when the calling agent's model is reachable (MCP
+  // sampling), let it dismiss the false positives a token matcher cannot tell
+  // from real drift — examples, removed/deprecated mentions, third-party and
+  // standard vars. No API key of our own; uses the caller's model.
+  let dismissed = 0;
+  let adjudicated = false;
+  if (sampler && findings.length) {
+    const idOf = (f: Finding) => `${f.doc}:${f.line}:${f.kind}:${f.text}`;
+    const candidates: Candidate[] = findings.map((f) => ({
+      id: idOf(f),
+      kind: f.kind,
+      text: f.text,
+      status: f.status,
+      location: `${f.doc}:${f.line}`,
+      context: contextLines(root, f.doc, f.line),
+      note: f.explanation,
+    }));
+    const rulings = await adjudicate(candidates, sampler);
+    if (rulings.size) {
+      adjudicated = true;
+      const kept: Finding[] = [];
+      for (const f of findings) {
+        const r = rulings.get(idOf(f));
+        if (r && !r.real) {
+          dismissed++;
+          continue;
+        }
+        if (r?.reason) f.explanation = `${f.explanation} (confirmed by host model: ${r.reason})`;
+        kept.push(f);
+      }
+      findings.splice(0, findings.length, ...kept);
+    }
+  }
+
   // Errors first, then by confidence — the agent should act on these top-down.
   findings.sort(
     (a, b) =>
@@ -167,6 +218,17 @@ async function runCheck(args: {
   if (truncated) {
     addNote(`Showing ${MAX_FINDINGS} of ${findings.length} findings.`);
   }
+  if (adjudicated) {
+    addNote(
+      `Adjudicated by the host model via MCP sampling; ${dismissed} candidate(s) dismissed as false positives.`,
+    );
+  } else if (sampler) {
+    addNote("Host-model adjudication returned no usable result; showing raw deterministic findings.");
+  }
+
+  const engineParts = ["reference"];
+  if (useLlm && llmRan) engineParts.push("llm");
+  if (adjudicated) engineParts.push("host-llm");
 
   return {
     summary: {
@@ -175,15 +237,15 @@ async function runCheck(args: {
       drifted,
       undocumented,
       unverifiable,
-      engine: useLlm && llmRan ? "reference+llm" : "reference",
+      engine: engineParts.join("+"),
     },
     findings: shown,
     note,
   };
 }
 
-/** Start the stdio MCP server. Only protocol messages go to stdout. */
-export async function runMcpServer(): Promise<void> {
+/** Build the MCP server with its handlers (transport-agnostic; reused by tests). */
+export function createServer(): Server {
   const server = new Server(
     { name: "docverity", version: "0.3.0" },
     { capabilities: { tools: {} } },
@@ -207,7 +269,21 @@ export async function runMcpServer(): Promise<void> {
       };
     }
     try {
-      const result = await runCheck((req.params.arguments ?? {}) as any);
+      // If the host supports MCP sampling, hand candidate findings to its model
+      // (the user's own Claude) to adjudicate — no API key of our own.
+      const caps = server.getClientCapabilities();
+      const sampler: Sampler | undefined = caps?.sampling
+        ? async (system, user) => {
+            const res = await server.createMessage({
+              systemPrompt: system,
+              messages: [{ role: "user", content: { type: "text", text: user } }],
+              maxTokens: 2000,
+            });
+            const c: any = res.content;
+            return c && c.type === "text" ? c.text : "";
+          }
+        : undefined;
+      const result = await runCheck((req.params.arguments ?? {}) as any, sampler);
       const headline =
         result.findings.length === 0
           ? "No doc drift detected."
@@ -227,5 +303,11 @@ export async function runMcpServer(): Promise<void> {
     }
   });
 
+  return server;
+}
+
+/** Start the stdio MCP server. Only protocol messages go to stdout. */
+export async function runMcpServer(): Promise<void> {
+  const server = createServer();
   await server.connect(new StdioServerTransport());
 }
