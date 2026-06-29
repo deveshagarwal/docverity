@@ -25,9 +25,16 @@ const FLAG_PATTERNS: RegExp[] = [
 
 // Platform/standard env vars that aren't app configuration worth documenting.
 const ENV_IGNORE = new Set([
-  "NODE_ENV", "CI", "HOME", "PATH", "PWD", "USER", "SHELL", "TERM", "LANG",
-  "LC_ALL", "TMPDIR", "TEMP", "TMP", "NODE_OPTIONS", "COLUMNS", "LINES",
-  "FORCE_COLOR", "NO_COLOR", "DEBUG", "PORT",
+  "NODE_ENV", "CI", "HOME", "PATH", "PWD", "OLDPWD", "USER", "LOGNAME", "SHELL",
+  "TERM", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TEMP", "TMP",
+  "HOSTNAME", "EDITOR", "VISUAL", "PAGER", "DISPLAY", "SSH_AUTH_SOCK", "MANPATH",
+  "NODE_OPTIONS", "COLUMNS", "LINES", "FORCE_COLOR", "NO_COLOR", "CLICOLOR",
+  "CLICOLOR_FORCE", "DEBUG", "PORT",
+  // Windows / XDG platform variables.
+  "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "USERNAME",
+  "COMSPEC", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "PROGRAMFILES", "PROGRAMDATA",
+  "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+  "XDG_RUNTIME_DIR", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS",
   // Generic placeholders that show up in code comments and examples.
   "NAME", "KEY", "VALUE", "VAR", "VARIABLE", "FOO", "BAR", "BAZ",
 ]);

@@ -11,6 +11,20 @@ const ENV_RE = /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,})\b/g;
 const PATH_RE =
   /([\w./-]+\/[\w./-]+\.[a-zA-Z0-9]+|[\w-]+(?:\.[\w-]+)*\.[a-zA-Z][a-zA-Z0-9]{0,8})\b/g;
 
+// Standard OS / shell / XDG environment variables. Docs reference these but
+// they are provided by the platform, not the documented project, so a "missing
+// in source" verdict is a false positive.
+const STANDARD_ENV = new Set([
+  "HOME", "PATH", "PWD", "OLDPWD", "USER", "LOGNAME", "SHELL", "TERM", "LANG",
+  "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TEMP", "TMP", "HOSTNAME", "EDITOR",
+  "VISUAL", "PAGER", "DISPLAY", "SSH_AUTH_SOCK", "MANPATH", "COLUMNS", "LINES",
+  "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+  "XDG_RUNTIME_DIR", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS",
+  "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "USERNAME",
+  "COMSPEC", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "PROGRAMFILES", "PROGRAMDATA",
+  "NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "NODE_OPTIONS",
+]);
+
 // Common English ALL_CAPS that are not env vars.
 const ENV_STOPWORDS = new Set([
   "NOTE",
@@ -247,6 +261,7 @@ export function extractClaims(root: string, docFile: string): Claim[] {
     tok: string,
     assertion: string,
     hints: string[],
+    weak = false,
   ) => {
     const key = `${kind}:${tok}`;
     if (seen.has(key)) return; // one claim per distinct token keeps noise down
@@ -259,6 +274,7 @@ export function extractClaims(root: string, docFile: string): Claim[] {
       text: tok,
       assertion,
       searchHints: hints,
+      weak,
     });
   };
 
@@ -313,9 +329,20 @@ export function extractClaims(root: string, docFile: string): Claim[] {
     // drop hypothetical *path* claims (see EXAMPLE_FRAMING_RE).
     const exampleFramed = EXAMPLE_FRAMING_RE.test(line);
 
+    // Flags inside an inline-code command for a *different* program
+    // (`git add --patch`, `npm install --save`) are that tool's flags, not the
+    // documented project's, even though the project itself is a CLI.
+    const foreignFlags = new Set<string>();
+    for (const span of inlineSpans) {
+      const t = span.trim();
+      if (/^[\w./@-]+\s+\S/.test(t) && /--[a-zA-Z]/.test(t) && !commandIsOwn(t, ownCommands, isCli, root)) {
+        for (const fm of t.matchAll(FLAG_RE)) foreignFlags.add(fm[2]);
+      }
+    }
     if (isCli) {
       for (const m of lineSansLinks.matchAll(FLAG_RE)) {
         const flag = m[2];
+        if (foreignFlags.has(flag)) continue;
         push("flag", lineNo, flag, `the CLI flag ${flag} exists`, [flag]);
       }
     }
@@ -331,10 +358,12 @@ export function extractClaims(root: string, docFile: string): Claim[] {
         /^[A-Z][A-Z0-9_]*\s*=/.test(trimmed) || /^\{\s*[A-Z][A-Z0-9_]*\s*:/.test(trimmed);
       for (const m of span.matchAll(ENV_RE)) {
         const env = m[1];
-        if (ENV_STOPWORDS.has(env)) continue;
+        if (ENV_STOPWORDS.has(env) || STANDARD_ENV.has(env)) continue;
         if (isExampleAssignment) continue;
         if (PLACEHOLDER_ENV.has(env)) continue; // user-supplied placeholder, not project surface
-        push("env", lineNo, env, `the environment variable ${env} is used`, [env]);
+        // Env vars named only in inline prose are often examples; treat drift on
+        // them as a warning. The strong `VAR=value` shell form (below) stays an error.
+        push("env", lineNo, env, `the environment variable ${env} is used`, [env], true);
       }
 
       for (const m of span.matchAll(PATH_RE)) {
@@ -417,7 +446,11 @@ function extractFromCommand(
   lineNo: number,
   push: (kind: ClaimKind, line: number, tok: string, assertion: string, hints: string[]) => void,
 ): void {
-  for (const m of cmd.matchAll(FLAG_RE)) {
+  // Only the first command in a pipe/chain is the one we verified is the
+  // project's own; flags after a |, ;, &&, or || belong to a different program
+  // (e.g. `mytool ... | downstream --option`).
+  const own = cmd.split(/\s*(?:&&|\|\||[|;])\s*/)[0];
+  for (const m of own.matchAll(FLAG_RE)) {
     const flag = m[2];
     push("flag", lineNo, flag, `the CLI flag ${flag} exists`, [flag]);
   }
@@ -425,7 +458,9 @@ function extractFromCommand(
   // claims, not bare ALL_CAPS appearing in argument values or printed output.
   for (const m of cmd.matchAll(/(^|\s)([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,})=/g)) {
     const env = m[2];
-    if (ENV_STOPWORDS.has(env)) continue;
+    if (ENV_STOPWORDS.has(env) || STANDARD_ENV.has(env)) continue;
+    // A `VAR=value` assignment in a shell command is a strong, non-example
+    // signal that the project reads this env var: drift on it is an error.
     push("env", lineNo, env, `the environment variable ${env} is used`, [env]);
   }
 }

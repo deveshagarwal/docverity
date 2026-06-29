@@ -98,7 +98,7 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
       return {
         ...base,
         status: "drifted",
-        severity: driftSeverity(claim.kind),
+        severity: claim.weak ? "warning" : driftSeverity(claim.kind),
         confidence: 0.8,
         explanation: `The docs mention the ${noun} ${claim.text}, but it does not appear anywhere in the source.`,
         suggestedFix: `Verify ${claim.text} still exists; it may have been renamed or removed.`,

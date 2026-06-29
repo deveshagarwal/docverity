@@ -26,6 +26,11 @@ export interface Claim {
   assertion: string;
   /** Terms to search the codebase for when locating evidence. */
   searchHints: string[];
+  /**
+   * A weakly-asserted claim (e.g. an env var named only in inline prose, which
+   * is often an example) — drift on it is a warning rather than an error.
+   */
+  weak?: boolean;
 }
 
 export interface Evidence {
