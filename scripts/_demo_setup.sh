@@ -6,6 +6,10 @@ rm -rf "$DIR"
 mkdir -p "$DIR/src"
 cd "$DIR"
 
+cat > package.json <<'EOF'
+{ "name": "taskwarden", "version": "1.0.0", "bin": { "taskwarden": "src/cli.ts" } }
+EOF
+
 cat > src/cli.ts <<'EOF'
 export function run(argv: string[]) {
   const json = argv.includes("--json");
