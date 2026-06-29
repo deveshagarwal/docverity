@@ -67,6 +67,26 @@ async function verifyOne(root: string, claim: Claim): Promise<Verdict> {
           evidence: hits.slice(0, 3),
         };
       }
+      // Arg parsers (optionator, yargs, commander long names) declare options by
+      // their bare name — "output-file", not "--output-file" — so a multi-word
+      // flag missing its `--` form may still be defined. Only for hyphenated
+      // names, which are specific enough not to match incidental words.
+      if (claim.kind === "flag") {
+        const bare = claim.text.replace(/^--/, "");
+        if (bare.includes("-")) {
+          const bareHits = await searchToken(root, bare, "word");
+          if (bareHits.length > 0) {
+            return {
+              ...base,
+              status: "ok",
+              severity: "info",
+              confidence: 0.7,
+              explanation: `Found the option name "${bare}" in the source (declared without the -- prefix).`,
+              evidence: bareHits.slice(0, 3),
+            };
+          }
+        }
+      }
       const noun =
         claim.kind === "flag"
           ? "CLI flag"

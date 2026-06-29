@@ -1,5 +1,4 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -14,19 +13,7 @@ import { verifyLlm } from "./verify-llm.js";
 import { hasApiKey } from "./llm.js";
 import { discoverDocs } from "./discover.js";
 import { severityRank } from "./severity.js";
-import { adjudicate, type Sampler, type Candidate } from "./adjudicate.js";
-
-/** A few lines of context around a finding's location, for the adjudicator. */
-function contextLines(root: string, file: string, line: number, radius = 3): string {
-  try {
-    const lines = readFileSync(path.join(root, file), "utf8").split("\n");
-    const from = Math.max(0, line - 1 - radius);
-    const to = Math.min(lines.length, line + radius);
-    return lines.slice(from, to).join("\n");
-  } catch {
-    return "";
-  }
-}
+import { adjudicateVerdicts, type Sampler } from "./adjudicate.js";
 
 // The description is the agent's selection signal: it must say *when* to call
 // the tool, not just what it does. Recent models under-reach for tools, so the
@@ -124,12 +111,25 @@ async function runCheck(
     }
   }
 
+  // Host-model adjudication: when the caller's model is reachable (MCP
+  // sampling), drop the false positives a token matcher cannot tell from real
+  // drift. Uses the caller's model — no API key of our own.
+  let dismissed = 0;
+  let adjudicated = false;
+  let checked = verdicts;
+  if (sampler) {
+    const adj = await adjudicateVerdicts(root, verdicts, sampler);
+    checked = adj.kept;
+    dismissed = adj.dismissed;
+    adjudicated = adj.ran;
+  }
+
   let ok = 0;
   let drifted = 0;
   let unverifiable = 0;
   let undocumented = 0;
   const findings: Finding[] = [];
-  for (const v of verdicts) {
+  for (const v of checked) {
     if (v.status === "ok") ok++;
     else if (v.status === "drifted") drifted++;
     else if (v.status === "undocumented") undocumented++;
@@ -157,40 +157,6 @@ async function runCheck(
       suggestedFix: v.suggestedFix,
       evidence: v.evidence[0] ? `${v.evidence[0].file}:${v.evidence[0].line}` : undefined,
     });
-  }
-
-  // Host-LLM adjudication: when the calling agent's model is reachable (MCP
-  // sampling), let it dismiss the false positives a token matcher cannot tell
-  // from real drift — examples, removed/deprecated mentions, third-party and
-  // standard vars. No API key of our own; uses the caller's model.
-  let dismissed = 0;
-  let adjudicated = false;
-  if (sampler && findings.length) {
-    const idOf = (f: Finding) => `${f.doc}:${f.line}:${f.kind}:${f.text}`;
-    const candidates: Candidate[] = findings.map((f) => ({
-      id: idOf(f),
-      kind: f.kind,
-      text: f.text,
-      status: f.status,
-      location: `${f.doc}:${f.line}`,
-      context: contextLines(root, f.doc, f.line),
-      note: f.explanation,
-    }));
-    const rulings = await adjudicate(candidates, sampler);
-    if (rulings.size) {
-      adjudicated = true;
-      const kept: Finding[] = [];
-      for (const f of findings) {
-        const r = rulings.get(idOf(f));
-        if (r && !r.real) {
-          dismissed++;
-          continue;
-        }
-        if (r?.reason) f.explanation = `${f.explanation} (confirmed by host model: ${r.reason})`;
-        kept.push(f);
-      }
-      findings.splice(0, findings.length, ...kept);
-    }
   }
 
   // Errors first, then by confidence — the agent should act on these top-down.

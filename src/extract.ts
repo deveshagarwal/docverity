@@ -171,6 +171,15 @@ function isExampleLike(p: string): boolean {
   return p.split(/[\\/]/).some((seg) => EXAMPLE_DIR_SEGMENTS.has(seg));
 }
 
+// Changelogs, migration guides, and upgrade notes intentionally name flags,
+// env vars, and options that have been REMOVED ("the following flags are no
+// longer supported: --no-eslintrc"). Extracting claims from them produces pure
+// false positives, so they are not checked for drift.
+function isHistoricalDoc(rel: string): boolean {
+  const base = (rel.split(/[\\/]/).pop() ?? "").toLowerCase();
+  return /(change-?log|migrat|migrate|upgrad|deprecat|breaking[-_]?change|whats-?new)/.test(base);
+}
+
 // Prose that explicitly frames the following token as illustrative ("like",
 // "such as", "for example", "e.g."). When a path span sits on such a line it
 // is a hypothetical, not a claim the repo contains that file — e.g. dotenv's
@@ -214,6 +223,8 @@ const RUNTIME_GLOBALS = new Set([
 export function extractClaims(root: string, docFile: string): Claim[] {
   const abs = path.isAbsolute(docFile) ? docFile : path.join(root, docFile);
   const rel = path.relative(root, abs);
+  // Migration guides / changelogs legitimately name removed things; skip them.
+  if (isHistoricalDoc(rel)) return [];
   const text = readFileSync(abs, "utf8");
   const lines = text.split("\n");
 

@@ -7,7 +7,8 @@ import type { CheckOptions, Verdict } from "./types.js";
 import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
 import { findUndocumented } from "./coverage.js";
-import { hasApiKey } from "./llm.js";
+import { hasApiKey, apiKeySampler } from "./llm.js";
+import { adjudicateVerdicts } from "./adjudicate.js";
 import type { Severity } from "./types.js";
 import { printReport, printGithubAnnotations, toJson, summarize } from "./report.js";
 import { discoverDocs } from "./discover.js";
@@ -98,7 +99,7 @@ program
     // Lazy-load the LLM engine (and its SDK) only when actually used.
     const verifyLlm = useLlm ? (await import("./verify-llm.js")).verifyLlm : null;
 
-    const verdicts: Verdict[] = [];
+    let verdicts: Verdict[] = [];
     for (const doc of docFiles) {
       try {
         verdicts.push(...(await verifyReference(root, extractClaims(root, doc))));
@@ -123,6 +124,26 @@ program
         verdicts.push(...findUndocumented(root, docFiles));
       } catch (err: any) {
         console.error(kleur.yellow(`Coverage check failed: ${err?.message ?? err}`));
+      }
+    }
+
+    // When a key is available, let the model adjudicate the candidate findings,
+    // dismissing examples, removed-flag mentions, and third-party references the
+    // deterministic engine cannot tell from real drift.
+    if (useLlm) {
+      const sampler = apiKeySampler(opts.model);
+      if (sampler) {
+        try {
+          const adj = await adjudicateVerdicts(root, verdicts, sampler);
+          verdicts = adj.kept;
+          if (adj.dismissed && rawOpts.format === "pretty") {
+            console.error(
+              kleur.dim(`${adj.dismissed} finding(s) dismissed by the model as false positives.`),
+            );
+          }
+        } catch (err: any) {
+          console.error(kleur.yellow(`Adjudication failed: ${err?.message ?? err}`));
+        }
       }
     }
 

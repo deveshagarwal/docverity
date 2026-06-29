@@ -1,10 +1,29 @@
 // The Anthropic SDK is imported lazily so the default deterministic path (and
 // `npx docverity` cold start) never pays to load it.
+import type { Sampler } from "./adjudicate.js";
 
 let client: any = null;
 
 export function hasApiKey(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+}
+
+/** A Sampler backed by our own Anthropic key, for the CLI's adjudication pass. */
+export function apiKeySampler(model: string): Sampler | null {
+  if (!hasApiKey()) return null;
+  return async (system, user) => {
+    const c = await getClient();
+    const params: Record<string, unknown> = {
+      model,
+      max_tokens: 4000,
+      thinking: { type: "adaptive" },
+      system,
+      messages: [{ role: "user", content: user }],
+    };
+    const res = await c.messages.create(params as never);
+    const block = res.content.find((b: any) => b.type === "text");
+    return block ? block.text : "";
+  };
 }
 
 async function getClient(): Promise<any> {

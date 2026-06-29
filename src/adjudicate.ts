@@ -5,6 +5,10 @@
 // key of our own, and the judgement understands examples, removals, and
 // third-party references that a token matcher cannot.
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import type { Verdict } from "./types.js";
+
 export type Sampler = (system: string, user: string) => Promise<string>;
 
 export interface Candidate {
@@ -85,4 +89,68 @@ export async function adjudicate(
     }
   }
   return out;
+}
+
+/** A few lines of context around a finding's location, for the adjudicator. */
+function contextLines(root: string, file: string, line: number, radius = 3): string {
+  try {
+    const lines = readFileSync(path.join(root, file), "utf8").split("\n");
+    return lines.slice(Math.max(0, line - 1 - radius), line + radius).join("\n");
+  } catch {
+    return "";
+  }
+}
+
+const verdictId = (v: Verdict) =>
+  `${v.claim.docFile}:${v.claim.line}:${v.claim.kind}:${v.claim.text}`;
+
+/**
+ * Run drifted/undocumented verdicts past the caller's model and drop the ones
+ * it judges false. ok/unverifiable verdicts pass through untouched. On any
+ * sampling failure the original verdicts are returned unchanged (ran=false).
+ */
+export async function adjudicateVerdicts(
+  root: string,
+  verdicts: Verdict[],
+  sample: Sampler,
+): Promise<{ kept: Verdict[]; dismissed: number; ran: boolean }> {
+  const candidates: Candidate[] = verdicts
+    .filter((v) => v.status === "drifted" || v.status === "undocumented")
+    .map((v) => ({
+      id: verdictId(v),
+      kind: v.claim.kind,
+      text: v.claim.text,
+      status: v.status as "drifted" | "undocumented",
+      location: `${v.claim.docFile}:${v.claim.line}`,
+      context: contextLines(root, v.claim.docFile, v.claim.line),
+      note: v.explanation,
+    }));
+  if (!candidates.length) return { kept: verdicts, dismissed: 0, ran: false };
+
+  // Batch so a doc-heavy repo doesn't overflow a single request.
+  const rulings = new Map<string, Adjudication>();
+  const BATCH = 40;
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    const m = await adjudicate(candidates.slice(i, i + BATCH), sample);
+    for (const [k, val] of m) rulings.set(k, val);
+  }
+  if (!rulings.size) return { kept: verdicts, dismissed: 0, ran: false };
+
+  let dismissed = 0;
+  const kept: Verdict[] = [];
+  for (const v of verdicts) {
+    if (v.status === "drifted" || v.status === "undocumented") {
+      const r = rulings.get(verdictId(v));
+      if (r && !r.real) {
+        dismissed++;
+        continue;
+      }
+      kept.push(
+        r?.reason ? { ...v, explanation: `${v.explanation} (confirmed: ${r.reason})` } : v,
+      );
+    } else {
+      kept.push(v);
+    }
+  }
+  return { kept, dismissed, ran: true };
 }
