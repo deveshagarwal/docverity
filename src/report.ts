@@ -122,7 +122,7 @@ export function printReport(verdicts: Verdict[], opts: CheckOptions): boolean {
   );
   if (!failed) {
     console.log(
-      kleur.dim(`warnings only — build passes (raise --fail-on to enforce)\n`),
+      kleur.dim(`warnings only: build passes (raise --fail-on to enforce)\n`),
     );
   } else {
     console.log();
@@ -142,7 +142,7 @@ export function printGithubAnnotations(verdicts: Verdict[], opts: CheckOptions):
   for (const v of reportable(verdicts, opts)) {
     const level = v.severity === "error" ? "error" : "warning";
     const label = v.status === "undocumented" ? "undocumented" : "doc drift";
-    const msg = `${label}: ${v.claim.text} — ${v.explanation}`;
+    const msg = `${label}: ${v.claim.text}. ${v.explanation}`;
     console.log(
       `::${level} file=${escProp(v.claim.docFile)},line=${v.claim.line},title=docverity::${escData(msg)}`,
     );
