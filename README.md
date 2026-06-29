@@ -1,5 +1,9 @@
 # Docverity
 
+[![npm](https://img.shields.io/npm/v/docverity?color=cb3837&logo=npm)](https://www.npmjs.com/package/docverity)
+[![CI](https://github.com/deveshagarwal/docverity/actions/workflows/ci.yml/badge.svg)](https://github.com/deveshagarwal/docverity/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/docverity?color=blue)](LICENSE)
+
 **AI made documentation rot an epidemic.**
 
 ![Docverity catching documentation drift](docs/demo.gif)
