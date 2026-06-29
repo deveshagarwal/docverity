@@ -1,11 +1,57 @@
 // The Anthropic SDK is imported lazily so the default deterministic path (and
 // `npx docverity` cold start) never pays to load it.
+import { spawn, spawnSync } from "node:child_process";
 import type { Sampler } from "./adjudicate.js";
 
 let client: any = null;
 
 export function hasApiKey(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+}
+
+let claudeChecked = false;
+let claudeAvailable = false;
+
+/** Whether the `claude` CLI (Claude Code) is on PATH. */
+export function hasClaudeCli(): boolean {
+  if (claudeChecked) return claudeAvailable;
+  claudeChecked = true;
+  try {
+    claudeAvailable =
+      spawnSync("claude", ["--version"], { stdio: "ignore", timeout: 5000 }).status === 0;
+  } catch {
+    claudeAvailable = false;
+  }
+  return claudeAvailable;
+}
+
+/**
+ * A Sampler backed by the `claude` CLI — uses the user's own Claude Code
+ * subscription, no API key. Returns "" on any failure so adjudication falls
+ * back to the deterministic verdicts.
+ */
+export function claudeCliSampler(): Sampler | null {
+  if (!hasClaudeCli()) return null;
+  return (system, user) =>
+    new Promise<string>((resolve) => {
+      const child = spawn("claude", ["-p"], { stdio: ["pipe", "pipe", "ignore"] });
+      let out = "";
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        resolve(out);
+      }, 180000);
+      child.stdout.on("data", (d) => (out += d.toString()));
+      child.on("error", () => {
+        clearTimeout(timer);
+        resolve("");
+      });
+      child.on("close", () => {
+        clearTimeout(timer);
+        resolve(out);
+      });
+      child.stdin.write(`${system}\n\n${user}`);
+      child.stdin.end();
+    });
 }
 
 /** A Sampler backed by our own Anthropic key, for the CLI's adjudication pass. */

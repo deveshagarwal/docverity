@@ -60,11 +60,20 @@ explicitly to narrow the scope, and use `-C` to point at another root:
 docverity -C path/to/repo
 ```
 
-Skip the LLM engine for a fast, deterministic-only run:
+Skip the model entirely for a fast, deterministic-only run:
 
 ```bash
 docverity --no-llm
 ```
+
+When a model is available, Docverity runs an **adjudication pass** that dismisses
+the false positives a token matcher can't tell from real drift (illustrative
+examples, flags documented as removed, other tools' commands). It finds a model
+in this order, and needs no setup if you already use Claude Code:
+
+1. `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`),
+2. the `claude` CLI (Claude Code) if it is on your PATH — uses your subscription,
+3. when running as an MCP server, the host's model via MCP sampling.
 
 ### Options
 

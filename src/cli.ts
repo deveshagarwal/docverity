@@ -7,7 +7,7 @@ import type { CheckOptions, Verdict } from "./types.js";
 import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
 import { findUndocumented } from "./coverage.js";
-import { hasApiKey, apiKeySampler } from "./llm.js";
+import { hasApiKey, apiKeySampler, claudeCliSampler, hasClaudeCli } from "./llm.js";
 import { adjudicateVerdicts } from "./adjudicate.js";
 import type { Severity } from "./types.js";
 import { printReport, printGithubAnnotations, toJson, summarize } from "./report.js";
@@ -77,10 +77,10 @@ program
     }
 
     const useLlm = rawOpts.llm && hasApiKey();
-    if (rawOpts.llm && !hasApiKey() && rawOpts.format === "pretty") {
+    if (rawOpts.llm && !hasApiKey() && !hasClaudeCli() && rawOpts.format === "pretty") {
       console.error(
         kleur.dim(
-          "No ANTHROPIC_API_KEY set — running deterministic checks only. Set a key to verify prose claims.",
+          "No ANTHROPIC_API_KEY or `claude` CLI found — running deterministic checks only.",
         ),
       );
     }
@@ -127,11 +127,12 @@ program
       }
     }
 
-    // When a key is available, let the model adjudicate the candidate findings,
-    // dismissing examples, removed-flag mentions, and third-party references the
+    // Adjudicate candidate findings with a model when one is reachable — our own
+    // key, or the user's `claude` CLI (Claude Code), no key required — dismissing
+    // examples, removed-flag mentions, and third-party references the
     // deterministic engine cannot tell from real drift.
-    if (useLlm) {
-      const sampler = apiKeySampler(opts.model);
+    if (rawOpts.llm) {
+      const sampler = apiKeySampler(opts.model) ?? claudeCliSampler();
       if (sampler) {
         try {
           const adj = await adjudicateVerdicts(root, verdicts, sampler);
