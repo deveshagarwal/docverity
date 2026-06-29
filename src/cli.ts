@@ -7,6 +7,7 @@ import type { CheckOptions, Verdict } from "./types.js";
 import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
 import { findUndocumented } from "./coverage.js";
+import { findUndocumentedCapabilities } from "./coverage-llm.js";
 import { hasApiKey, apiKeySampler, claudeCliSampler, hasClaudeCli } from "./llm.js";
 import { adjudicateVerdicts } from "./adjudicate.js";
 import type { Severity } from "./types.js";
@@ -144,6 +145,17 @@ program
           }
         } catch (err: any) {
           console.error(kleur.yellow(`Adjudication failed: ${err?.message ?? err}`));
+        }
+
+        // Behavioral coverage: capabilities the code exposes (a mode, a
+        // subcommand's behavior, an output format) that the docs never mention.
+        // The token scanner can't see these; the model can.
+        if (opts.coverage) {
+          try {
+            verdicts.push(...(await findUndocumentedCapabilities(root, sampler)));
+          } catch (err: any) {
+            console.error(kleur.yellow(`Capability coverage failed: ${err?.message ?? err}`));
+          }
         }
       }
     }

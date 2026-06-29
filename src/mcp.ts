@@ -9,6 +9,7 @@ import type { Verdict } from "./types.js";
 import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
 import { findUndocumented } from "./coverage.js";
+import { findUndocumentedCapabilities } from "./coverage-llm.js";
 import { verifyLlm } from "./verify-llm.js";
 import { hasApiKey } from "./llm.js";
 import { discoverDocs } from "./discover.js";
@@ -122,6 +123,16 @@ async function runCheck(
     checked = adj.kept;
     dismissed = adj.dismissed;
     adjudicated = adj.ran;
+
+    // Behavioral coverage: capabilities the code exposes that the docs omit.
+    // Appended after adjudication so they aren't run through the token judge.
+    if (wantCoverage) {
+      try {
+        checked = checked.concat(await findUndocumentedCapabilities(root, sampler));
+      } catch {
+        /* best-effort */
+      }
+    }
   }
 
   let ok = 0;

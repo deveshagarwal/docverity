@@ -22,14 +22,18 @@ what the code actually does.
 
 Docverity runs three complementary checks:
 
-- **Reference checker** — deterministic, no API key, instant. Catches docs that
+- **Reference checker**: deterministic, no API key, instant. Catches docs that
   mention files, CLI flags, environment variables, or symbols that no longer
   exist anywhere in the source.
-- **Claim verifier** — LLM-backed, catches prose-level semantic drift: "the
+- **Claim verifier**: LLM-backed, catches prose-level semantic drift: "the
   default timeout is 30s", "this returns a list", "set `FOO=bar` to enable X".
   Runs when `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) is set.
-- **Coverage** — the reverse direction: flags and environment variables the
-  code uses that the docs never mention. On by default, reported as warnings.
+- **Coverage**: the reverse direction, surface the code exposes that the docs
+  never mention. Deterministically it catches CLI flags, environment variables,
+  subcommands, and accepted option/enum values. When a model is reachable it
+  also runs a **capability pass** that catches undocumented *behavior* a token
+  match cannot see: a new mode, an output format, an integration surface, a
+  changed default. On by default, reported as warnings.
 
 Works free out of the box. Gets smarter with a key.
 
@@ -76,7 +80,7 @@ examples, flags documented as removed, other tools' commands). It finds a model
 in this order, and needs no setup if you already use Claude Code:
 
 1. `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`),
-2. the `claude` CLI (Claude Code) if it is on your PATH — uses your subscription,
+2. the `claude` CLI (Claude Code) if it is on your PATH, using your subscription,
 3. when running as an MCP server, the host's model via MCP sampling.
 
 ### Options
@@ -137,22 +141,25 @@ drift in the same turn it changed the code. Add it to your MCP client:
 This exposes one tool, `check_docs`, which returns each drifted claim with its
 file, line, the stale text, code evidence, a confidence score, and a suggested
 fix the agent can apply directly. It runs the deterministic engine by default
-(fast, free, no key); pass `llm: true` to also verify prose claims.
+(fast, free, no key); pass `llm: true` to also verify prose claims. It accepts
+`root`, `docs`, `coverage` (default true), and `failConfidence` (default 0.7).
+When the host supports MCP sampling, findings are adjudicated and the capability
+pass runs using the host's model, with no API key of docverity's own.
 
 A [`SKILL.md`](SKILL.md) is included so the agent knows when to reach for it
 (after editing code, before a release, when asked whether the docs are correct).
 
 ## How it works
 
-1. **Extract** — parse each doc into atomic claims (a flag, a path, an env var,
+1. **Extract**: parse each doc into atomic claims (a flag, a path, an env var,
    a symbol, or a prose assertion).
-2. **Locate** — search the source tree (via ripgrep when available) for evidence
+2. **Locate**: search the source tree (via ripgrep when available) for evidence
    of each claim. Documentation files are excluded from evidence: a claim must
    be backed by code, not by the docs restating it.
-3. **Verify** — the reference engine checks for hard evidence; the LLM engine
+3. **Verify**: the reference engine checks for hard evidence; the LLM engine
    judges prose claims against the located evidence and returns
    ok / drifted / unverifiable with a specific reason.
-4. **Report** — pretty output, machine-readable JSON, or GitHub annotations.
+4. **Report**: pretty output, machine-readable JSON, or GitHub annotations.
 
 ## License
 

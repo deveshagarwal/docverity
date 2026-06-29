@@ -12,7 +12,7 @@ const SKIP_DIRS = new Set([
 ]);
 
 /** Concatenate every documentation file in the repo, for membership checks. */
-function allDocText(root: string): string {
+export function allDocText(root: string): string {
   const parts: string[] = [];
   let budget = 8_000_000;
   const walk = (dir: string) => {
@@ -73,6 +73,37 @@ const FLAG_PATTERNS: RegExp[] = [
   /add_argument\(\s*["'](--[a-zA-Z][\w-]+)["']/g, // argparse
 ];
 
+// Subcommand declarations. `.command(...)` is ambiguous (Redis, Discord, and
+// other libraries use it too), so these only run on files that look like a CLI
+// entry point (see looksLikeCliFile) — the leading identifier is the command.
+const SUBCOMMAND_PATTERNS: RegExp[] = [
+  /\.command\(\s*["'`]([a-zA-Z][\w-]*)/g, // commander / yargs
+  /add_parser\(\s*["']([a-zA-Z][\w-]*)/g, // argparse subparsers
+];
+
+// Accepted option values declared as an explicit choice set: commander
+// `.choices([...])`, argparse `choices=[...]`, click `Choice([...])`.
+const CHOICE_BLOCK_PATTERNS: RegExp[] = [
+  /\.choices\(\s*\[([^\]]*)\]/g,
+  /\bchoices\s*=\s*[[(]([^\])]*)[)\]]/g,
+  /\bChoice\(\s*\[([^\]]*)\]/g,
+];
+
+// Commands an arg parser adds for free, or catch-alls that aren't real names.
+const SUBCOMMAND_IGNORE = new Set(["help", "completion", "version"]);
+
+// `.command(...)` and `.choices(...)` only count as CLI surface in a file that
+// is actually wiring up an argument parser — keeps unrelated `.command()` APIs
+// (database clients, bots) from looking like undocumented subcommands.
+export function looksLikeCliFile(content: string): boolean {
+  return (
+    /\.option\(|add_argument\(|add_parser\(|new Command\(|ArgumentParser\(/.test(content) ||
+    /\bfrom\s+["']commander|require\(\s*["']commander|\byargs\b|\bargparse\b|click\.command|cobra\.Command/.test(
+      content,
+    )
+  );
+}
+
 // Platform/standard env vars that aren't app configuration worth documenting.
 const ENV_IGNORE = new Set([
   "NODE_ENV", "CI", "HOME", "PATH", "PWD", "OLDPWD", "USER", "LOGNAME", "SHELL",
@@ -107,7 +138,7 @@ function isTestLikeFile(file: string): boolean {
   return /\.(test|test-d|spec)\.[cm]?[jt]sx?$/.test(base);
 }
 
-function inSkippedDir(file: string): boolean {
+export function inSkippedDir(file: string): boolean {
   const segs = file.split(/[\\/]/);
   if (segs.some((seg) => COVERAGE_SKIP_DIRS.has(seg))) return true;
   // Hand-written type declarations (typings/, *.d.ts) describe the API for
@@ -186,12 +217,48 @@ export function findUndocumented(root: string, docFiles: string[]): Verdict[] {
         }
       }
     }
+
+    // Subcommands and explicit choice values are only mined from genuine CLI
+    // entry files, where `.command()`/`.choices()` mean what we think they mean.
+    if (looksLikeCliFile(content)) {
+      for (const re of SUBCOMMAND_PATTERNS) {
+        re.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(content))) {
+          const name = m[1];
+          if (SUBCOMMAND_IGNORE.has(name)) continue;
+          record("subcommand", name, file, lineOf(content, m.index));
+        }
+      }
+      for (const re of CHOICE_BLOCK_PATTERNS) {
+        re.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(content))) {
+          const values = m[1].match(/["'`]([^"'`]+)["'`]/g) ?? [];
+          for (const raw of values) {
+            const val = raw.slice(1, -1);
+            // Skip one-character and purely numeric values: too common to check
+            // by substring, and rarely the thing a reader looks up.
+            if (val.length < 2 || /^\d+$/.test(val)) continue;
+            record("value", val, file, lineOf(content, m.index));
+          }
+        }
+      }
+    }
   }
+
+  // How each kind of finding reads in the report.
+  const PHRASE: Record<string, string> = {
+    env: "uses the environment variable",
+    flag: "uses the CLI flag",
+    subcommand: "defines the subcommand",
+    value: "accepts the value",
+  };
 
   const verdicts: Verdict[] = [];
   for (const f of found.values()) {
     if (docText.includes(f.text)) continue; // documented somewhere
-    const noun = f.kind === "env" ? "environment variable" : "CLI flag";
+    const phrase = PHRASE[f.kind] ?? `uses ${f.kind}`;
     verdicts.push({
       claim: {
         id: `coverage:${f.kind}:${f.text}`,
@@ -205,7 +272,7 @@ export function findUndocumented(root: string, docFiles: string[]): Verdict[] {
       status: "undocumented",
       severity: "warning",
       confidence: 0.75,
-      explanation: `The code uses the ${noun} ${f.text} (${f.file}:${f.line}), but no documentation mentions it.`,
+      explanation: `The code ${phrase} ${f.text} (${f.file}:${f.line}), but no documentation mentions it.`,
       suggestedFix: `Document ${f.text}, or remove it if it is no longer used.`,
       evidence: [{ file: f.file, line: f.line, snippet: "" }],
       engine: "coverage",

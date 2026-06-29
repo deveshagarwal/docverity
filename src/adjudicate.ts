@@ -40,7 +40,7 @@ Mark realProblem=true ONLY when the documentation asserts the PROJECT'S OWN curr
 Return STRICT JSON only: {"verdicts":[{"id":"...","realProblem":true|false,"reason":"..."}]}`;
 
 /** Pull the first balanced JSON object out of a model response. */
-function extractJson(text: string): string {
+export function extractJson(text: string): string {
   const start = text.indexOf("{");
   if (start < 0) return text;
   let depth = 0;
