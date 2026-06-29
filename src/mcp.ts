@@ -10,6 +10,7 @@ import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
 import { findUndocumented } from "./coverage.js";
 import { findUndocumentedCapabilities } from "./coverage-llm.js";
+import { enrichWithGitHistory } from "./git.js";
 import { verifyLlm } from "./verify-llm.js";
 import { hasApiKey } from "./llm.js";
 import { discoverDocs } from "./discover.js";
@@ -104,11 +105,23 @@ async function runCheck(
       }
     }
   }
+  let docsLastChanged: string | undefined;
+  let commitsSinceDocs = 0;
   if (wantCoverage) {
     try {
       verdicts.push(...findUndocumented(root, docFiles));
     } catch {
       /* coverage is best-effort */
+    }
+    // Git history: elevate undocumented surface added after the docs last
+    // changed, and report the staleness so the agent knows how far docs lag.
+    try {
+      const g = enrichWithGitHistory(root, verdicts, docFiles);
+      verdicts.splice(0, verdicts.length, ...g.verdicts);
+      docsLastChanged = g.baseline?.date;
+      commitsSinceDocs = g.commitsSince;
+    } catch {
+      /* not a git repo / shallow clone — skip */
     }
   }
 
@@ -215,6 +228,9 @@ async function runCheck(
       undocumented,
       unverifiable,
       engine: engineParts.join("+"),
+      ...(docsLastChanged
+        ? { docsLastChanged, commitsSinceDocs }
+        : {}),
     },
     findings: shown,
     note,

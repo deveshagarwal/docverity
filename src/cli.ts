@@ -8,6 +8,7 @@ import { extractClaims } from "./extract.js";
 import { verifyReference } from "./verify-reference.js";
 import { findUndocumented } from "./coverage.js";
 import { findUndocumentedCapabilities } from "./coverage-llm.js";
+import { enrichWithGitHistory, type GitStaleness } from "./git.js";
 import { hasApiKey, apiKeySampler, claudeCliSampler, hasClaudeCli } from "./llm.js";
 import { adjudicateVerdicts } from "./adjudicate.js";
 import type { Severity } from "./types.js";
@@ -128,6 +129,18 @@ program
       }
     }
 
+    // Git history: elevate undocumented surface the code added after the docs
+    // were last updated, and surface a staleness headline. Best-effort.
+    let staleness: GitStaleness | null = null;
+    if (opts.coverage) {
+      try {
+        staleness = enrichWithGitHistory(root, verdicts, docFiles);
+        verdicts = staleness.verdicts;
+      } catch {
+        /* not a git repo, shallow clone, etc. — skip */
+      }
+    }
+
     // Adjudicate candidate findings with a model when one is reachable — our own
     // key, or the user's `claude` CLI (Claude Code), no key required — dismissing
     // examples, removed-flag mentions, and third-party references the
@@ -158,6 +171,18 @@ program
           }
         }
       }
+    }
+
+    if (
+      rawOpts.format === "pretty" &&
+      staleness?.baseline &&
+      staleness.commitsSince > 0
+    ) {
+      console.error(
+        kleur.dim(
+          `Docs last changed ${staleness.baseline.date}; ${staleness.commitsSince} commit(s) to the repo since.`,
+        ),
+      );
     }
 
     let shouldFail: boolean;

@@ -35,6 +35,12 @@ Docverity runs three complementary checks:
   match cannot see: a new mode, an output format, an integration surface, a
   changed default. On by default, reported as warnings.
 
+In a git repository, coverage is **history-aware**: it finds the last commit
+that touched the docs and elevates any undocumented surface the code added
+*after* that point (a far stronger "you forgot to document this" signal than a
+bare token absence), and reports how many commits the docs now lag behind. It
+degrades silently outside git or in a shallow clone.
+
 Works free out of the box. Gets smarter with a key.
 
 Every finding has a **severity**: `error` (a reader acts on it and gets burned)
