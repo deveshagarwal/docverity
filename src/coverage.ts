@@ -43,8 +43,32 @@ const COVERAGE_SKIP_DIRS = new Set([
   "script", "scripts", "demo", "demos", "bench", "benchmarks",
 ]);
 
+// Type-test / declaration-test / spec filenames hold illustrative option and
+// env usage (e.g. commander's typings/index.test-d.ts), not the real surface.
+function isTestLikeFile(file: string): boolean {
+  const base = file.split(/[\\/]/).pop() ?? file;
+  return /\.(test|test-d|spec)\.[cm]?[jt]sx?$/.test(base);
+}
+
 function inSkippedDir(file: string): boolean {
-  return file.split(/[\\/]/).some((seg) => COVERAGE_SKIP_DIRS.has(seg));
+  const segs = file.split(/[\\/]/);
+  if (segs.some((seg) => COVERAGE_SKIP_DIRS.has(seg))) return true;
+  // Hand-written type declarations (typings/, *.d.ts) describe the API for
+  // consumers; their example `.option()` calls are not the app's own flags.
+  if (segs.includes("typings") || /\.d\.ts$/.test(file)) return true;
+  return isTestLikeFile(file);
+}
+
+/**
+ * Blank out block comments (slash-star … star-slash) and full-line // comments
+ * while preserving newline count, so JSDoc `@example` snippets like
+ * `* .option('--pt, --pizza-type <TYPE>')` are not mistaken for real flag
+ * declarations. Line numbers of surviving code are unaffected.
+ */
+function stripComments(content: string): string {
+  let out = content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+  out = out.replace(/^[ \t]*\/\/.*$/gm, "");
+  return out;
 }
 
 interface Found {
@@ -84,8 +108,10 @@ export function findUndocumented(root: string, docFiles: string[]): Verdict[] {
     if (!found.has(key)) found.set(key, { kind, text, file, line });
   };
 
-  for (const { file, content } of readSourceFiles(root)) {
+  for (const { file, content: rawContent } of readSourceFiles(root)) {
     if (inSkippedDir(file)) continue;
+    // Mine declarations from real code only, not from commented-out examples.
+    const content = stripComments(rawContent);
     for (const re of ENV_PATTERNS) {
       re.lastIndex = 0;
       let m: RegExpExecArray | null;

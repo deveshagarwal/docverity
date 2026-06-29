@@ -7,6 +7,11 @@ import type { Evidence } from "./types.js";
 const execFileAsync = promisify(execFile);
 
 // Directories never worth searching for evidence of documented behavior.
+// NOTE: "vendor" is intentionally NOT ignored. Third-party deps live in
+// node_modules (ignored); a committed `vendor/` (or `source/vendor/`, as in
+// chalk) is code the project ships and is responsible for, so behavior it
+// implements there — e.g. chalk's FORCE_COLOR / --color handling in
+// source/vendor/supports-color — is real evidence, not noise.
 const IGNORE_DIRS = [
   "node_modules",
   ".git",
@@ -16,7 +21,6 @@ const IGNORE_DIRS = [
   "coverage",
   ".next",
   ".venv",
-  "vendor",
 ];
 
 // Documentation file types are excluded from evidence: a claim in the docs
