@@ -6,7 +6,7 @@
 
 **AI made documentation rot an epidemic.**
 
-![Docverity catching documentation drift](docs/demo.gif)
+![Docverity reviewing a stale README and drafting the fixes](docs/demo.gif)
 
 Code changes by the hour, and AI assistants only make it faster. Documentation
 does not keep up. Docverity reads your documentation, extracts the concrete

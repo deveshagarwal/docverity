@@ -1,0 +1,13 @@
+
+4 documentation suggestions (showing 1 of 4):
+
+### Document the suggest and mcp subcommands  [add]
+Where: README.md  (new "Commands" section)
+
+## Commands
+
+- `docverity check`    run the reference, coverage, and narrative checks.
+- `docverity suggest`  draft the missing docs for surface the checks found uncovered.
+- `docverity mcp`      run Docverity as an MCP server.
+
+(+3 more: --format values, --fail-on, DOCVERITY_TOKEN.  Re-run with --write to apply.)
