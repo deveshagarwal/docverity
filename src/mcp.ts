@@ -240,7 +240,7 @@ async function runCheck(
 /** Build the MCP server with its handlers (transport-agnostic; reused by tests). */
 export function createServer(): Server {
   const server = new Server(
-    { name: "docverity", version: "0.4.0" },
+    { name: "docverity", version: "0.5.0" },
     { capabilities: { tools: {} } },
   );
 
