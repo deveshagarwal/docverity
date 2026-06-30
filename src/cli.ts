@@ -9,6 +9,8 @@ import { verifyReference } from "./verify-reference.js";
 import { findUndocumented } from "./coverage.js";
 import { findUndocumentedCapabilities } from "./coverage-llm.js";
 import { enrichWithGitHistory, type GitStaleness } from "./git.js";
+import { checkSelfCount, checkNarrative } from "./narrative.js";
+import { runSuggest, renderSuggestionsBlock, writeSuggestions } from "./suggest.js";
 import { hasApiKey, apiKeySampler, claudeCliSampler, hasClaudeCli } from "./llm.js";
 import { adjudicateVerdicts } from "./adjudicate.js";
 import type { Severity } from "./types.js";
@@ -141,6 +143,16 @@ program
       }
     }
 
+    // Narrative self-consistency: a section that says "three checks" but lists
+    // four. Deterministic, no model.
+    for (const doc of docFiles) {
+      try {
+        verdicts.push(...checkSelfCount(root, doc));
+      } catch {
+        /* best-effort */
+      }
+    }
+
     // Adjudicate candidate findings with a model when one is reachable — our own
     // key, or the user's `claude` CLI (Claude Code), no key required — dismissing
     // examples, removed-flag mentions, and third-party references the
@@ -169,6 +181,14 @@ program
           } catch (err: any) {
             console.error(kleur.yellow(`Capability coverage failed: ${err?.message ?? err}`));
           }
+        }
+
+        // Narrative faithfulness: descriptive sections (a pipeline, an
+        // enumeration) that omit a step the code actually runs.
+        try {
+          verdicts.push(...(await checkNarrative(root, docFiles, sampler)));
+        } catch (err: any) {
+          console.error(kleur.yellow(`Narrative check failed: ${err?.message ?? err}`));
         }
       }
     }
@@ -205,6 +225,58 @@ program
   .action(async () => {
     const { runMcpServer } = await import("./mcp.js");
     await runMcpServer();
+  });
+
+program
+  .command("suggest")
+  .description("Draft documentation for everything the code exposes but the docs don't cover.")
+  .argument("[docs...]", "doc files to consider (default: README + docs/**/*.md)")
+  .option("-C, --root <dir>", "repo root", process.cwd())
+  .option("--model <id>", "model used to draft the docs", "claude-opus-4-8")
+  .option("--write", "append the suggestions to a doc file instead of only printing", false)
+  .option("--into <file>", "file to append to with --write (default: first doc, else README.md)")
+  .action(async (docs: string[], rawOpts) => {
+    const root = path.resolve(rawOpts.root);
+    const docFiles = docs.length
+      ? docs.map((d) => path.relative(root, path.resolve(d)))
+      : discoverDocs(root);
+
+    // Drafting needs a model. Same resolution order as the check command.
+    const sampler = apiKeySampler(rawOpts.model) ?? claudeCliSampler();
+    if (!sampler) {
+      console.error(
+        kleur.red(
+          "`suggest` needs a model. Set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN), or install the `claude` CLI.",
+        ),
+      );
+      process.exit(2);
+    }
+
+    const suggestions = await runSuggest(root, docFiles, sampler);
+    if (!suggestions.length) {
+      console.log(
+        kleur.green("Nothing to suggest — the docs already cover the code's surface."),
+      );
+      process.exit(0);
+    }
+
+    if (rawOpts.write) {
+      const into = rawOpts.into
+        ? path.relative(root, path.resolve(rawOpts.into))
+        : docFiles[0] ?? "README.md";
+      const written = writeSuggestions(root, into, suggestions);
+      console.log(
+        kleur.green(
+          `Wrote ${suggestions.length} suggestion(s) to ${written} between docverity markers. Review, edit, then remove the markers.`,
+        ),
+      );
+    } else {
+      console.log(
+        kleur.bold(`\n${suggestions.length} documentation suggestion(s):\n`),
+      );
+      console.log(renderSuggestionsBlock(suggestions));
+      console.log(kleur.dim("Re-run with --write to append these to a doc file."));
+    }
   });
 
 program.parseAsync();

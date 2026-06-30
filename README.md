@@ -18,9 +18,9 @@ docs. Docverity verifies the prose around them: the flags, options, environment
 variables, paths, and behavior your documentation describes are checked against
 what the code actually does.
 
-## Three checks
+## The checks
 
-Docverity runs three complementary checks:
+Docverity runs several complementary checks:
 
 - **Reference checker**: deterministic, no API key, instant. Catches docs that
   mention files, CLI flags, environment variables, or symbols that no longer
@@ -34,6 +34,12 @@ Docverity runs three complementary checks:
   also runs a **capability pass** that catches undocumented *behavior* a token
   match cannot see: a new mode, an output format, an integration surface, a
   changed default. On by default, reported as warnings.
+- **Narrative**: whether a section that describes the system is still a faithful
+  account of it. Deterministically it flags a section whose stated count
+  disagrees with its list ("three checks" above four bullets). With a model it
+  flags a descriptive section, a pipeline or enumeration, that omits a step the
+  code actually runs, the failure mode where no single claim is false but the
+  account is incomplete.
 
 In a git repository, coverage is **history-aware**: it finds the last commit
 that touched the docs and elevates any undocumented surface the code added
@@ -42,6 +48,11 @@ bare token absence), and reports how many commits the docs now lag behind. It
 degrades silently outside git or in a shallow clone.
 
 Works free out of the box. Gets smarter with a key.
+
+Docverity is not JavaScript-only. The reference checker is language-agnostic (it
+searches the source tree for tokens), and coverage detects environment variables
+and flags in Python, Go, Java, and Ruby as well as JS/TS. It reads Markdown,
+reStructuredText, AsciiDoc, and plain-text docs.
 
 Every finding has a **severity**: `error` (a reader acts on it and gets burned)
 or `warning` (real but not blocking). By default only errors fail the build, so
@@ -106,6 +117,30 @@ Docverity fails CI the way a linter would. Exit codes: `0` clean (or warnings
 only), `1` a finding at or above `--fail-on` severity, `2` a configuration error
 (e.g. an invalid `--fail-confidence`/`--fail-on` or a missing doc file) so a
 typo can never mask real drift with a green build.
+
+## Draft the missing docs
+
+Detection tells you what's missing; `suggest` writes it for you. It reads what
+the code exposes and drafts the documentation to cover everything the docs
+don't, real markdown, grounded in a deterministic scan of the undocumented
+surface and in the source so the prose is accurate:
+
+```bash
+docverity suggest
+```
+
+By default it prints the drafted improvements (a command's options table, an
+environment-variables section, a revised pipeline). Pass `--write` to append
+them to a doc file between replaceable markers, additive, so nothing you wrote
+is overwritten and re-running refreshes the same block:
+
+```bash
+docverity suggest --write           # appends to README (or the first doc)
+docverity suggest --write --into docs/cli.md
+```
+
+`suggest` needs a model, found the same way the check does (`ANTHROPIC_API_KEY`,
+the `claude` CLI, or an MCP host).
 
 ## In CI (GitHub Actions)
 
@@ -173,10 +208,12 @@ Docverity makes several passes and merges the results:
    env vars, subcommands, option values) and report what the docs never mention.
    With a model, a capability pass adds undocumented *behavior*; in a git repo,
    surface the code added after the docs last changed is elevated.
-5. **Adjudicate**: when a model is reachable, hand the candidate findings back to
+5. **Narrative**: check that sections describing the system (a pipeline, an
+   enumeration) are still complete and self-consistent accounts of the code.
+6. **Adjudicate**: when a model is reachable, hand the candidate findings back to
    it to drop the false positives a token matcher cannot tell from real drift
    (illustrative examples, flags documented as removed, other tools' tokens).
-6. **Report**: pretty output, machine-readable JSON, or GitHub annotations, each
+7. **Report**: pretty output, machine-readable JSON, or GitHub annotations, each
    finding carrying a severity.
 
 ## License

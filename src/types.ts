@@ -13,6 +13,7 @@ export type ClaimKind =
   | "subcommand" // a CLI subcommand the program defines, e.g. `mcp`
   | "value" // an accepted option/enum value, e.g. --format github
   | "capability" // a user-facing behavior or mode (LLM coverage pass)
+  | "section" // a doc section that describes the system (narrative pass)
   | "prose"; // a free-text assertion (verified only by the LLM engine)
 
 export interface Claim {
@@ -69,7 +70,7 @@ export interface Verdict {
   /** Optional suggested doc fix (LLM engine only). */
   suggestedFix?: string;
   /** Which engine produced this verdict. */
-  engine: "reference" | "llm" | "coverage" | "coverage-llm";
+  engine: "reference" | "llm" | "coverage" | "coverage-llm" | "narrative";
 }
 
 export interface CheckOptions {

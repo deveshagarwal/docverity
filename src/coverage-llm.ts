@@ -34,6 +34,21 @@ const PER_FILE_CAP = 12_000;
 const MAX_FILES = 6;
 const MAX_FINDINGS = 12;
 
+/** Gather the project's entry-point source as `=== path ===\n<slice>` blocks,
+ * capped, for grounding the model. Shared by the capability and narrative passes. */
+export function entrySourceBlob(root: string): string {
+  const picked: { file: string; slice: string }[] = [];
+  let budget = FILE_BUDGET;
+  for (const { file, content } of readSourceFiles(root)) {
+    if (picked.length >= MAX_FILES || budget <= 0) break;
+    if (!isEntryFile(file, content)) continue;
+    const slice = content.slice(0, PER_FILE_CAP);
+    picked.push({ file, slice });
+    budget -= slice.length;
+  }
+  return picked.map((f) => `=== ${f.file} ===\n${f.slice}`).join("\n\n");
+}
+
 function isEntryFile(file: string, content: string): boolean {
   if (inSkippedDir(file)) return false;
   if (
@@ -59,18 +74,10 @@ export async function findUndocumentedCapabilities(
   const docs = allDocText(root).slice(0, DOC_BUDGET);
   if (!docs.trim()) return [];
 
-  const picked: { file: string; slice: string }[] = [];
-  let budget = FILE_BUDGET;
-  for (const { file, content } of readSourceFiles(root)) {
-    if (picked.length >= MAX_FILES || budget <= 0) break;
-    if (!isEntryFile(file, content)) continue;
-    const slice = content.slice(0, PER_FILE_CAP);
-    picked.push({ file, slice });
-    budget -= slice.length;
-  }
-  if (!picked.length) return [];
+  const sourceBlob = entrySourceBlob(root);
+  if (!sourceBlob) return [];
 
-  const sourceBlob = picked.map((f) => `=== ${f.file} ===\n${f.slice}`).join("\n\n");
+  const fallbackFile = sourceBlob.split("\n", 1)[0].replace(/^=== | ===$/g, "");
   const user = `DOCUMENTATION:\n${docs}\n\n---\nENTRY-POINT SOURCE:\n${sourceBlob}`;
 
   let text: string;
@@ -98,7 +105,7 @@ export async function findUndocumentedCapabilities(
 
     const ev = typeof it.evidence === "string" ? it.evidence : "";
     const [evFile, evLine] = ev.split(":");
-    const file = evFile?.trim() || picked[0].file;
+    const file = evFile?.trim() || fallbackFile;
     const line = Number(evLine) || 1;
 
     verdicts.push({
