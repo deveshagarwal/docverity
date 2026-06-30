@@ -150,22 +150,34 @@ fix the agent can apply directly. It runs the deterministic engine by default
 (fast, free, no key); pass `llm: true` to also verify prose claims. It accepts
 `root`, `docs`, `coverage` (default true), and `failConfidence` (default 0.7).
 When the host supports MCP sampling, findings are adjudicated and the capability
-pass runs using the host's model, with no API key of docverity's own.
+pass runs using the host's model, with no API key of docverity's own. In a git
+repo the summary also reports `docsLastChanged` and `commitsSinceDocs`, so the
+agent knows how far the docs lag the code it just changed.
 
 A [`SKILL.md`](SKILL.md) is included so the agent knows when to reach for it
 (after editing code, before a release, when asked whether the docs are correct).
 
 ## How it works
 
-1. **Extract**: parse each doc into atomic claims (a flag, a path, an env var,
-   a symbol, or a prose assertion).
+Docverity makes several passes and merges the results:
+
+1. **Extract**: parse each doc into atomic claims (a flag, a path, an env var, a
+   symbol, a subcommand, or a prose assertion).
 2. **Locate**: search the source tree (via ripgrep when available) for evidence
    of each claim. Documentation files are excluded from evidence: a claim must
    be backed by code, not by the docs restating it.
-3. **Verify**: the reference engine checks for hard evidence; the LLM engine
-   judges prose claims against the located evidence and returns
-   ok / drifted / unverifiable with a specific reason.
-4. **Report**: pretty output, machine-readable JSON, or GitHub annotations.
+3. **Verify drift** (docs to code): the reference engine confirms each token
+   still exists; the LLM engine judges prose claims (values, defaults, behavior)
+   against the located evidence and returns ok / drifted / unverifiable.
+4. **Coverage** (code to docs): scan the public surface the code exposes (flags,
+   env vars, subcommands, option values) and report what the docs never mention.
+   With a model, a capability pass adds undocumented *behavior*; in a git repo,
+   surface the code added after the docs last changed is elevated.
+5. **Adjudicate**: when a model is reachable, hand the candidate findings back to
+   it to drop the false positives a token matcher cannot tell from real drift
+   (illustrative examples, flags documented as removed, other tools' tokens).
+6. **Report**: pretty output, machine-readable JSON, or GitHub annotations, each
+   finding carrying a severity.
 
 ## License
 
